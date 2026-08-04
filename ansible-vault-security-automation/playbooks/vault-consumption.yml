@@ -1,0 +1,100 @@
+---
+- name: Consume encrypted secrets securely
+  hosts: local
+  gather_facts: false
+
+  vars:
+    output_directory: "{{ playbook_dir }}/../rendered"
+
+  tasks:
+    - name: Ensure secure output directory exists
+      ansible.builtin.file:
+        path: "{{ output_directory }}"
+        state: directory
+        mode: "0700"
+
+    - name: Load default database secrets
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/database_secrets.yml"
+        name: database_secrets
+      no_log: true
+
+    - name: Load staging secrets
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/staging_secrets.yml"
+        name: staging_secrets
+      no_log: true
+
+    - name: Load plain encrypted admin secrets
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/plain_secrets.yml"
+        name: admin_secrets
+      no_log: true
+
+    - name: Load production secrets using vault identity
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/production_secrets.yml"
+        name: production_secrets
+      no_log: true
+
+    - name: Display masked secret summary
+      ansible.builtin.debug:
+        msg:
+          - "Default database host: {{ database_secrets.db_host }}"
+          - "Staging database host: {{ staging_secrets.db_host }}"
+          - "Production database host: {{ production_secrets.db_host }}"
+          - "Admin email: {{ admin_secrets.admin_email }}"
+          - "Database password length: {{ database_secrets.db_password | length }}"
+          - "Production password length: {{ production_secrets.db_password | length }}"
+          - "Staging API endpoint: {{ staging_secrets.api_endpoint }}"
+
+    - name: Render default environment configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/secure_app_config.j2"
+        dest: "{{ output_directory }}/default-database.env"
+        mode: "0600"
+      vars:
+        env_label: default
+        secrets: "{{ database_secrets }}"
+        admin: "{{ admin_secrets }}"
+      no_log: true
+
+    - name: Render staging environment configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/secure_app_config.j2"
+        dest: "{{ output_directory }}/staging.env"
+        mode: "0600"
+      vars:
+        env_label: staging
+        secrets: "{{ staging_secrets }}"
+        admin: "{{ admin_secrets }}"
+      no_log: true
+
+    - name: Render production environment configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/secure_app_config.j2"
+        dest: "{{ output_directory }}/production.env"
+        mode: "0600"
+      vars:
+        env_label: production
+        secrets: "{{ production_secrets }}"
+        admin: "{{ admin_secrets }}"
+      no_log: true
+
+    - name: Verify rendered files exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ output_directory }}/default-database.env"
+        - "{{ output_directory }}/staging.env"
+        - "{{ output_directory }}/production.env"
+      register: rendered_files
+
+    - name: Assert rendered files were created securely
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode == "0600"
+        fail_msg: "Rendered file {{ item.item }} is missing or has insecure permissions."
+        success_msg: "Rendered file {{ item.item }} exists with secure permissions."
+      loop: "{{ rendered_files.results }}"

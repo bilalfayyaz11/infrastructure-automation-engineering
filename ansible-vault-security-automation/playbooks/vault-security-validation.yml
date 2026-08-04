@@ -1,0 +1,61 @@
+---
+- name: Validate Vault security controls
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Load default secrets
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/database_secrets.yml"
+        name: database_secrets
+      no_log: true
+
+    - name: Load staging secrets
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/staging_secrets.yml"
+        name: staging_secrets
+      no_log: true
+
+    - name: Load production secrets
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/production_secrets.yml"
+        name: production_secrets
+      no_log: true
+
+    - name: Verify environment namespaces remain separate
+      ansible.builtin.assert:
+        that:
+          - database_secrets.db_name == "production_db"
+          - staging_secrets.db_name == "staging_db"
+          - production_secrets.db_name == "production_main"
+          - database_secrets.db_username != staging_secrets.db_username
+          - staging_secrets.db_username != production_secrets.db_username
+        fail_msg: "Vault namespaces were overwritten or resolved incorrectly."
+        success_msg: "Vault namespaces remain isolated."
+
+    - name: Check running process arguments
+      ansible.builtin.command:
+        cmd: ps -eo args
+      register: process_arguments
+      changed_when: false
+
+    - name: Verify loaded secret values are absent from process arguments
+      ansible.builtin.assert:
+        that:
+          - database_secrets.db_password not in process_arguments.stdout
+          - staging_secrets.db_password not in process_arguments.stdout
+          - production_secrets.db_password not in process_arguments.stdout
+          - database_secrets.api_key not in process_arguments.stdout
+          - production_secrets.monitoring_api_key not in process_arguments.stdout
+        fail_msg: "A loaded secret value was exposed in process arguments."
+        success_msg: "No loaded secret values were found in process arguments."
+      no_log: true
+
+    - name: Display validation summary
+      ansible.builtin.debug:
+        msg:
+          - "Default vault loaded successfully."
+          - "Staging vault loaded successfully."
+          - "Production vault ID loaded successfully."
+          - "Encrypted variable namespaces remain isolated."
+          - "No loaded secret appeared in process arguments."

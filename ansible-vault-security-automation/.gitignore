@@ -1,0 +1,7 @@
+*.retry
+*.log
+backups/
+decrypted/
+.vault_pass*
+vault-password*
+production-password*

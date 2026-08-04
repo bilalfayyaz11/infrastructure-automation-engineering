@@ -1,0 +1,37 @@
+# Managed by Ansible
+ENV_LABEL={{ env_label }}
+DB_USERNAME={{ secrets.db_username }}
+DB_PASSWORD={{ secrets.db_password }}
+DB_HOST={{ secrets.db_host }}
+DB_PORT={{ secrets.db_port }}
+DB_NAME={{ secrets.db_name }}
+{% if secrets.api_key is defined %}
+API_KEY={{ secrets.api_key }}
+{% endif %}
+{% if secrets.secret_token is defined %}
+SECRET_TOKEN={{ secrets.secret_token }}
+{% endif %}
+{% if secrets.api_endpoint is defined %}
+API_ENDPOINT={{ secrets.api_endpoint }}
+{% endif %}
+{% if secrets.monitoring_api_key is defined %}
+MONITORING_API_KEY={{ secrets.monitoring_api_key }}
+{% endif %}
+{% if secrets.alert_webhook is defined %}
+ALERT_WEBHOOK={{ secrets.alert_webhook }}
+{% endif %}
+{% if admin.admin_email is defined %}
+ADMIN_EMAIL={{ admin.admin_email }}
+{% endif %}
+{% if admin.admin_password is defined %}
+ADMIN_PASSWORD={{ admin.admin_password }}
+{% endif %}
+{% if admin.smtp_server is defined %}
+SMTP_SERVER={{ admin.smtp_server }}
+{% endif %}
+{% if admin.smtp_username is defined %}
+SMTP_USERNAME={{ admin.smtp_username }}
+{% endif %}
+{% if admin.smtp_password is defined %}
+SMTP_PASSWORD={{ admin.smtp_password }}
+{% endif %}

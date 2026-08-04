@@ -1,0 +1,71 @@
+---
+- name: Validate encrypted variables and secure handling
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Load encrypted database variables
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../vault_files/database_secrets.yml"
+        name: database_secrets
+      no_log: true
+
+    - name: Verify required vault variables
+      ansible.builtin.assert:
+        that:
+          - database_secrets.db_username is defined
+          - database_secrets.db_password is defined
+          - database_secrets.db_host is defined
+          - database_secrets.db_port is defined
+          - database_secrets.db_name is defined
+          - database_secrets.api_key is defined
+          - database_secrets.db_password | length > 0
+          - database_secrets.api_key | length > 0
+        fail_msg: "Required encrypted variables are missing or empty."
+        success_msg: "Required encrypted variables are present."
+
+    - name: Create masked connection description
+      ansible.builtin.set_fact:
+        masked_connection: >-
+          postgresql://{{ database_secrets.db_username }}:***@
+          {{ database_secrets.db_host }}:
+          {{ database_secrets.db_port }}/
+          {{ database_secrets.db_name }}
+      no_log: true
+
+    - name: Display safe diagnostic information
+      ansible.builtin.debug:
+        msg:
+          - "Database host: {{ database_secrets.db_host }}"
+          - "Database name: {{ database_secrets.db_name }}"
+          - "Database password length: {{ database_secrets.db_password | length }}"
+          - "API key length: {{ database_secrets.api_key | length }}"
+          - "Masked connection: {{ masked_connection }}"
+
+    - name: Create secure diagnostic report
+      ansible.builtin.copy:
+        dest: /tmp/vault-diagnostic.txt
+        mode: "0600"
+        content: |
+          Vault Diagnostic Report
+          Database host: {{ database_secrets.db_host }}
+          Database port: {{ database_secrets.db_port }}
+          Database name: {{ database_secrets.db_name }}
+          Database user configured: true
+          Database password configured: true
+          API key configured: true
+          Password length: {{ database_secrets.db_password | length }}
+          API key length: {{ database_secrets.api_key | length }}
+
+    - name: Inspect diagnostic report
+      ansible.builtin.stat:
+        path: /tmp/vault-diagnostic.txt
+      register: diagnostic_report
+
+    - name: Verify diagnostic report permissions
+      ansible.builtin.assert:
+        that:
+          - diagnostic_report.stat.exists
+          - diagnostic_report.stat.mode == "0600"
+        fail_msg: "Diagnostic report is missing or insecure."
+        success_msg: "Diagnostic report exists with mode 0600."
