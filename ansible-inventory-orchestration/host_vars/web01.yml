@@ -1,0 +1,4 @@
+---
+host_identifier: primary-web-node
+host_support_tier: critical
+maintenance_window: sunday-0200

@@ -1,0 +1,5 @@
+---
+service_role: web
+http_port: 80
+https_port: 443
+web_service_name: nginx

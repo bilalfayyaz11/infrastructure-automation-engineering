@@ -1,0 +1,5 @@
+---
+service_role: database
+database_engine: postgresql
+database_port: 5432
+database_backup_enabled: true

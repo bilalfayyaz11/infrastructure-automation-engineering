@@ -1,0 +1,5 @@
+---
+environment_name: production
+monitoring_enabled: true
+backup_policy: daily
+deployment_region: us-east-1
