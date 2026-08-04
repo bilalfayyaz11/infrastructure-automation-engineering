@@ -1,0 +1,20 @@
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    server_name {{ ansible_hostname }} localhost;
+    root {{ web_root }};
+    index index.html;
+
+    access_log /var/log/nginx/appsite_access.log;
+    error_log /var/log/nginx/appsite_error.log;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location = /health {
+        default_type application/json;
+        return 200 '{"status":"healthy","host":"{{ ansible_hostname }}"}';
+    }
+}

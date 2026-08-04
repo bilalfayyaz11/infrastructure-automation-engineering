@@ -1,0 +1,184 @@
+---
+- name: Assert application baseline without modifying state
+  hosts: local
+  become: true
+  gather_facts: false
+
+  vars:
+    expected_uid: "2401"
+    expected_gid: "2401"
+    required_packages:
+      - nginx
+      - git
+      - curl
+      - tree
+
+  tasks:
+    - name: Query application user
+      ansible.builtin.command:
+        cmd: getent passwd appuser
+      register: appuser_entry
+      changed_when: false
+
+    - name: Assert application user UID and non-login shell
+      ansible.builtin.assert:
+        that:
+          - appuser_entry.rc == 0
+          - appuser_entry.stdout.split(':')[2] == expected_uid
+          - appuser_entry.stdout.split(':')[6] == '/usr/sbin/nologin'
+        fail_msg: "appuser is missing or has incorrect account properties."
+        success_msg: "appuser exists with the expected UID and shell."
+      changed_when: false
+
+    - name: Query application group
+      ansible.builtin.command:
+        cmd: getent group appgroup
+      register: appgroup_entry
+      changed_when: false
+
+    - name: Assert application group GID
+      ansible.builtin.assert:
+        that:
+          - appgroup_entry.rc == 0
+          - appgroup_entry.stdout.split(':')[2] == expected_gid
+        fail_msg: "appgroup is missing or has the incorrect GID."
+        success_msg: "appgroup exists with the expected GID."
+      changed_when: false
+
+    - name: Query required package state
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - -W
+          - -f=${Status}
+          - "{{ item }}"
+      loop: "{{ required_packages }}"
+      register: package_queries
+      changed_when: false
+
+    - name: Assert every required package is installed
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - "'install ok installed' in item.stdout"
+        fail_msg: "Required package {{ item.item }} is not installed."
+        success_msg: "Required package {{ item.item }} is installed."
+      loop: "{{ package_queries.results }}"
+      changed_when: false
+
+    - name: Inspect application configuration
+      ansible.builtin.stat:
+        path: /etc/appsite/app.conf
+      register: app_config
+      changed_when: false
+
+    - name: Assert application configuration properties
+      ansible.builtin.assert:
+        that:
+          - app_config.stat.exists
+          - app_config.stat.isreg
+          - app_config.stat.pw_name == 'appuser'
+          - app_config.stat.gr_name == 'appgroup'
+          - app_config.stat.mode == '0640'
+        fail_msg: "Application configuration ownership or permissions are incorrect."
+        success_msg: "Application configuration is present and securely permissioned."
+      changed_when: false
+
+    - name: Inspect nginx virtual host link
+      ansible.builtin.stat:
+        path: /etc/nginx/sites-enabled/appsite
+        follow: false
+      register: nginx_site_link
+      changed_when: false
+
+    - name: Assert nginx virtual host link exists
+      ansible.builtin.assert:
+        that:
+          - nginx_site_link.stat.exists
+          - nginx_site_link.stat.islnk
+        fail_msg: "Nginx application virtual host is not enabled."
+        success_msg: "Nginx application virtual host is enabled."
+      changed_when: false
+
+    - name: Inspect nginx monitoring configuration
+      ansible.builtin.stat:
+        path: /etc/nginx/conf.d/app_monitoring.conf
+      register: monitoring_config
+      changed_when: false
+
+    - name: Assert nginx monitoring configuration properties
+      ansible.builtin.assert:
+        that:
+          - monitoring_config.stat.exists
+          - monitoring_config.stat.isreg
+          - monitoring_config.stat.pw_name == 'root'
+          - monitoring_config.stat.gr_name == 'root'
+          - monitoring_config.stat.mode == '0644'
+        fail_msg: "Nginx monitoring configuration is missing or insecure."
+        success_msg: "Nginx monitoring configuration is correctly deployed."
+      changed_when: false
+
+    - name: Validate nginx syntax without modifying state
+      ansible.builtin.command:
+        cmd: /usr/sbin/nginx -t
+      register: nginx_syntax
+      changed_when: false
+
+    - name: Assert nginx syntax is valid
+      ansible.builtin.assert:
+        that:
+          - nginx_syntax.rc == 0
+        fail_msg: "Nginx configuration syntax is invalid."
+        success_msg: "Nginx configuration syntax is valid."
+      changed_when: false
+
+    - name: Query nginx service status
+      ansible.builtin.systemd_service:
+        name: nginx
+      register: nginx_service
+      changed_when: false
+
+    - name: Assert nginx is active and enabled
+      ansible.builtin.assert:
+        that:
+          - nginx_service.status.ActiveState == 'active'
+          - nginx_service.status.UnitFileState == 'enabled'
+        fail_msg: "Nginx is not both active and enabled."
+        success_msg: "Nginx is active and enabled."
+      changed_when: false
+
+    - name: Query application root endpoint
+      ansible.builtin.uri:
+        url: http://localhost/
+        method: GET
+        status_code: 200
+        return_content: true
+      register: root_response
+      changed_when: false
+
+    - name: Assert root endpoint response
+      ansible.builtin.assert:
+        that:
+          - root_response.status == 200
+          - "'Infrastructure state converged successfully' in root_response.content"
+        fail_msg: "Application root endpoint did not return the expected content."
+        success_msg: "Application root endpoint returned HTTP 200."
+      changed_when: false
+
+    - name: Query application health endpoint
+      ansible.builtin.uri:
+        url: http://localhost/health
+        method: GET
+        status_code: 200
+        return_content: true
+      register: health_response
+      changed_when: false
+
+    - name: Assert health endpoint response
+      ansible.builtin.assert:
+        that:
+          - health_response.status == 200
+          - "'healthy' in health_response.content"
+        fail_msg: "Application health endpoint failed."
+        success_msg: "Application health endpoint returned HTTP 200."
+      changed_when: false

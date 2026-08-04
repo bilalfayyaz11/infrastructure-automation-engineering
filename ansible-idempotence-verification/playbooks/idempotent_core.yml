@@ -1,0 +1,49 @@
+---
+- name: Apply a convergent declarative configuration
+  hosts: local
+  gather_facts: false
+
+  vars:
+    demo_root: /tmp/ansible-idempotent-demo
+    stable_runtime_directory: /tmp/idempotent-runtime
+
+  tasks:
+    - name: Ensure demonstration root exists
+      ansible.builtin.file:
+        path: "{{ demo_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    - name: Maintain a stable execution record
+      ansible.builtin.copy:
+        dest: "{{ demo_root }}/execution-history.log"
+        content: |
+          configuration_state=converged
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+
+    - name: Ensure one stable runtime directory exists
+      ansible.builtin.file:
+        path: "{{ stable_runtime_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    - name: Maintain one unique application mode key
+      ansible.builtin.lineinfile:
+        path: "{{ demo_root }}/application.conf"
+        regexp: '^application_mode='
+        line: 'application_mode=managed'
+        state: present
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      become: true

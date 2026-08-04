@@ -1,0 +1,148 @@
+---
+- name: Apply an idempotent application system baseline
+  hosts: local
+  become: true
+  gather_facts: true
+
+  vars:
+    app_user: appuser
+    app_group: appgroup
+    app_uid: 2401
+    app_gid: 2401
+    app_port: 80
+    web_root: /var/www/appsite
+    required_packages:
+      - nginx
+      - git
+      - curl
+      - tree
+
+  tasks:
+    - name: Create dedicated application group
+      ansible.builtin.group:
+        name: "{{ app_group }}"
+        gid: "{{ app_gid }}"
+        state: present
+        system: true
+
+    - name: Create dedicated non-login application user
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        uid: "{{ app_uid }}"
+        group: "{{ app_group }}"
+        shell: /usr/sbin/nologin
+        create_home: false
+        system: true
+        state: present
+
+    - name: Install required system packages
+      ansible.builtin.apt:
+        name: "{{ required_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      notify:
+        - Validate nginx configuration
+        - Enable and start nginx
+
+    - name: Create application configuration directory
+      ansible.builtin.file:
+        path: /etc/appsite
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0750"
+
+    - name: Create application web root
+      ansible.builtin.file:
+        path: "{{ web_root }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0755"
+
+    - name: Deploy stable application web page
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../files/index.html"
+        dest: "{{ web_root }}/index.html"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0644"
+
+    - name: Deploy stable application configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/app.conf.j2"
+        dest: /etc/appsite/app.conf
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0640"
+
+    - name: Deploy nginx virtual host configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/appsite.conf.j2"
+        dest: /etc/nginx/sites-available/appsite
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Validate nginx configuration
+        - Reload nginx
+
+    - name: Enable application virtual host
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/appsite
+        dest: /etc/nginx/sites-enabled/appsite
+        state: link
+        owner: root
+        group: root
+        force: true
+      notify:
+        - Validate nginx configuration
+        - Reload nginx
+
+    - name: Disable default nginx virtual host
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify:
+        - Validate nginx configuration
+        - Reload nginx
+
+    - name: Deploy stable nginx monitoring format
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/app_monitoring.conf
+        content: |
+          # Managed by Ansible
+          log_format app_monitor '$remote_addr $request_method $uri $status $request_time';
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Validate nginx configuration
+        - Reload nginx
+
+    - name: Run notified service handlers before completion
+      ansible.builtin.meta: flush_handlers
+
+  handlers:
+    - name: Validate nginx configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/nginx -t
+      changed_when: false
+      listen: Validate nginx configuration
+
+    - name: Enable and start nginx
+      ansible.builtin.systemd_service:
+        name: nginx
+        enabled: true
+        state: started
+        daemon_reload: false
+      listen: Enable and start nginx
+
+    - name: Reload nginx
+      ansible.builtin.systemd_service:
+        name: nginx
+        enabled: true
+        state: reloaded
+        daemon_reload: false
+      listen: Reload nginx

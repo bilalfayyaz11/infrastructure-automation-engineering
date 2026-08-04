@@ -1,0 +1,35 @@
+---
+- name: Demonstrate structurally non-idempotent automation
+  hosts: local
+  gather_facts: false
+
+  vars:
+    demo_root: /tmp/ansible-non-idempotent-demo
+
+  tasks:
+    - name: Ensure demonstration root exists
+      ansible.builtin.file:
+        path: "{{ demo_root }}"
+        state: directory
+        mode: "0755"
+
+    - name: Append a new timestamp on every execution
+      ansible.builtin.shell: |
+        printf 'execution_timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
+          >> "{{ demo_root }}/execution-history.log"
+      args:
+        executable: /bin/bash
+
+    - name: Create a uniquely named directory on every execution
+      ansible.builtin.shell: |
+        unique_value="$(date +%s%N)"
+        mkdir -p "{{ demo_root }}/runtime-${unique_value}"
+      args:
+        executable: /bin/bash
+
+    - name: Append the same configuration key on every execution
+      ansible.builtin.shell: |
+        printf '%s\n' 'application_mode=managed' \
+          >> "{{ demo_root }}/application.conf"
+      args:
+        executable: /bin/bash
