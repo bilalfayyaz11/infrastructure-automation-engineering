@@ -1,0 +1,3 @@
+---
+log_level: group-scope
+group_setting: applied-from-group-vars

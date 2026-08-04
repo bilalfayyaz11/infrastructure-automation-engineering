@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+cat << 'JSON'
+{
+  "app_version": "2.4.0",
+  "deploy_env": "production",
+  "max_workers": 4
+}
+JSON

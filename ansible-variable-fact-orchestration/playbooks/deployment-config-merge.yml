@@ -1,0 +1,26 @@
+---
+- name: Merge external deployment configuration
+  hosts: local
+  gather_facts: false
+
+  vars:
+    deployment_config:
+      environment: development
+      version: "1.0.0"
+      replicas: 1
+
+    deployment_overrides: {}
+
+    resolved_deployment_config: >-
+      {{
+        deployment_config
+        | combine(deployment_overrides, recursive=True)
+      }}
+
+  tasks:
+    - name: Display merged deployment configuration
+      ansible.builtin.debug:
+        msg:
+          - "Environment: {{ resolved_deployment_config.environment }}"
+          - "Version: {{ resolved_deployment_config.version }}"
+          - "Replicas: {{ resolved_deployment_config.replicas }}"

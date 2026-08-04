@@ -1,0 +1,15 @@
+---
+- name: Demonstrate Ansible variable precedence
+  hosts: local
+  gather_facts: false
+
+  vars:
+    log_level: play-scope
+
+  tasks:
+    - name: Display resolved variable scopes
+      ansible.builtin.debug:
+        msg:
+          - "Resolved log_level: {{ log_level }}"
+          - "Group variable: {{ group_setting }}"
+          - "Host variable: {{ host_setting }}"

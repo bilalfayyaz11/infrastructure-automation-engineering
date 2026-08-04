@@ -1,0 +1,4 @@
+---
+deployment_overrides:
+  environment: production
+  replicas: 4

@@ -1,0 +1,12 @@
+---
+- name: Demonstrate host variables overriding group variables
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Display resolved log level
+      ansible.builtin.debug:
+        msg:
+          - "Resolved log_level: {{ log_level }}"
+          - "Group variable: {{ group_setting }}"
+          - "Host variable: {{ host_setting }}"

@@ -1,0 +1,109 @@
+---
+- name: Make deployment decisions from live system facts
+  hosts: local
+  gather_facts: false
+
+  tasks:
+    - name: Gather operating-system facts
+      ansible.builtin.setup:
+        filter:
+          - ansible_distribution
+          - ansible_os_family
+
+    - name: Gather hardware facts
+      ansible.builtin.setup:
+        filter:
+          - ansible_memtotal_mb
+          - ansible_processor_cores
+
+    - name: Gather mount-point facts
+      ansible.builtin.setup:
+        filter:
+          - ansible_mounts
+
+    - name: Gather local custom facts
+      ansible.builtin.setup:
+        filter:
+          - ansible_local
+
+    - name: Verify required native and custom facts exist
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution is defined
+          - ansible_distribution | length > 0
+          - ansible_os_family is defined
+          - ansible_memtotal_mb is defined
+          - ansible_memtotal_mb | int > 0
+          - ansible_processor_cores is defined
+          - ansible_processor_cores | int > 0
+          - ansible_mounts is defined
+          - ansible_mounts | length > 0
+          - ansible_local.app_meta is defined
+          - ansible_local.app_meta.app_version is defined
+          - ansible_local.app_meta.deploy_env is defined
+        fail_msg: "One or more required system or custom facts are unavailable."
+        success_msg: "All required system and custom facts were gathered."
+
+    - name: Display gathered system and application facts
+      ansible.builtin.debug:
+        msg:
+          - "Distribution: {{ ansible_distribution }}"
+          - "OS family: {{ ansible_os_family }}"
+          - "Total memory MB: {{ ansible_memtotal_mb }}"
+          - "Processor cores: {{ ansible_processor_cores }}"
+          - "Mount points: {{ ansible_mounts | map(attribute='mount') | list }}"
+          - "Application version: {{ ansible_local.app_meta.app_version }}"
+          - "Deployment environment: {{ ansible_local.app_meta.deploy_env }}"
+          - "Maximum workers: {{ ansible_local.app_meta.max_workers }}"
+
+    - name: Evaluate available memory
+      block:
+        - name: Report low-memory system
+          ansible.builtin.debug:
+            msg: >-
+              Low-memory warning: {{ ansible_memtotal_mb }} MB detected.
+              Reduce worker count or use a larger instance.
+          when: ansible_memtotal_mb | int < 2048
+
+        - name: Report sufficient system memory
+          ansible.builtin.debug:
+            msg: >-
+              Sufficient memory: {{ ansible_memtotal_mb }} MB is available
+              for the deployment.
+          when: ansible_memtotal_mb | int >= 2048
+
+    - name: Apply Debian-family deployment decision
+      ansible.builtin.debug:
+        msg: >-
+          Debian-family system detected. Use APT packages,
+          systemd services, and Debian-compatible paths.
+      when: ansible_os_family == "Debian"
+
+    - name: Apply RedHat-family deployment decision
+      ansible.builtin.debug:
+        msg: >-
+          RedHat-family system detected. Use DNF packages,
+          systemd services, and RedHat-compatible paths.
+      when: ansible_os_family == "RedHat"
+
+    - name: Evaluate mount-point free space
+      ansible.builtin.debug:
+        msg: >-
+          {% set available_percent =
+            ((item.size_available | float / item.size_total | float) * 100)
+            if item.size_total | int > 0 else 0
+          %}
+          {% if available_percent < 20 %}
+          WARNING: {{ item.mount }} has only
+          {{ available_percent | round(2) }}% available space.
+          {% else %}
+          CLEAR: {{ item.mount }} has
+          {{ available_percent | round(2) }}% available space.
+          {% endif %}
+      loop: "{{ ansible_mounts }}"
+      loop_control:
+        label: "{{ item.mount }}"
+      when:
+        - item.size_total is defined
+        - item.size_available is defined
+        - item.size_total | int > 0
