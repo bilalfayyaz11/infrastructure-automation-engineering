@@ -1,0 +1,95 @@
+---
+- name: Provision variable-driven local resources
+  hosts: local
+  become: true
+  gather_facts: false
+
+  vars:
+    managed_users:
+      - name: apiworker
+        shell: /usr/sbin/nologin
+        comment: API processing service
+      - name: queueworker
+        shell: /usr/sbin/nologin
+        comment: Background queue service
+      - name: metricworker
+        shell: /usr/sbin/nologin
+        comment: Metrics collection service
+      - name: auditworker
+        shell: /usr/sbin/nologin
+        comment: Audit processing service
+
+    managed_directories:
+      - path: /opt/platform-api/config
+        owner: apiworker
+        group: apiworker
+        mode: "0750"
+      - path: /opt/platform-queue/config
+        owner: queueworker
+        group: queueworker
+        mode: "0750"
+      - path: /opt/platform-metrics/config
+        owner: metricworker
+        group: metricworker
+        mode: "0750"
+      - path: /var/lib/platform-audit/config
+        owner: auditworker
+        group: auditworker
+        mode: "0750"
+
+    managed_services:
+      platform_api:
+        port: 8080
+        config_dir: /opt/platform-api/config
+        owner: apiworker
+        group: apiworker
+      platform_queue:
+        port: 5672
+        config_dir: /opt/platform-queue/config
+        owner: queueworker
+        group: queueworker
+      platform_metrics:
+        port: 9090
+        config_dir: /opt/platform-metrics/config
+        owner: metricworker
+        group: metricworker
+
+    service_config_filename: service.conf
+
+  tasks:
+    - name: Create managed service accounts
+      ansible.builtin.user:
+        name: "{{ item.name }}"
+        shell: "{{ item.shell }}"
+        comment: "{{ item.comment }}"
+        create_home: false
+        system: true
+        state: present
+      with_items: "{{ managed_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create managed directory hierarchy
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop: "{{ managed_directories }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Write service configuration files
+      ansible.builtin.copy:
+        dest: "{{ item.value.config_dir }}/{{ service_config_filename }}"
+        owner: "{{ item.value.owner }}"
+        group: "{{ item.value.group }}"
+        mode: "0640"
+        content: |
+          service_name={{ item.key }}
+          service_port={{ item.value.port }}
+          config_directory={{ item.value.config_dir }}
+      loop: "{{ managed_services | ansible.builtin.dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"

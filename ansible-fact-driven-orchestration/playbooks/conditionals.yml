@@ -1,0 +1,152 @@
+---
+- name: Apply fact-driven local configuration
+  hosts: local
+  become: true
+  gather_facts: true
+
+  vars:
+    debian_packages:
+      - curl
+      - jq
+      - unzip
+
+    application_entries:
+      - name: telemetry-api
+        environment: production
+        min_memory_mb: 2048
+      - name: event-processor
+        environment: production
+        min_memory_mb: 8192
+      - name: developer-console
+        environment: development
+        min_memory_mb: 16384
+      - name: lightweight-agent
+        environment: development
+        min_memory_mb: 512
+
+    deployment_marker_directory: /tmp
+    deployment_marker_suffix: deployment.marker
+    resource_profile_path: /tmp/resource-profile.txt
+    cpu_profile_path: /tmp/cpu-profile.txt
+
+  tasks:
+    - name: Display gathered host facts
+      ansible.builtin.debug:
+        msg:
+          distribution: "{{ ansible_facts['distribution'] }}"
+          os_family: "{{ ansible_facts['os_family'] }}"
+          memory_mb: "{{ ansible_facts['memtotal_mb'] }}"
+          processor_count: "{{ ansible_facts['processor_count'] }}"
+
+    - name: Install Debian-family packages
+      ansible.builtin.apt:
+        name: "{{ debian_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when:
+        - ansible_facts['os_family'] == 'Debian'
+
+    - name: Write memory-based resource profile
+      ansible.builtin.copy:
+        dest: "{{ resource_profile_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          distribution={{ ansible_facts['distribution'] }}
+          os_family={{ ansible_facts['os_family'] }}
+          total_memory_mb={{ ansible_facts['memtotal_mb'] }}
+          processor_count={{ ansible_facts['processor_count'] }}
+          {% if ansible_facts['memtotal_mb'] < 2048 %}
+          memory_tier=small
+          workload_profile=lightweight
+          {% elif ansible_facts['memtotal_mb'] < 8192 %}
+          memory_tier=medium
+          workload_profile=standard
+          {% else %}
+          memory_tier=large
+          workload_profile=high-capacity
+          {% endif %}
+
+    - name: Write CPU-based execution profile
+      ansible.builtin.copy:
+        dest: "{{ cpu_profile_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          processor_count={{ ansible_facts['processor_count'] }}
+          {% if ansible_facts['processor_count'] >= 8 %}
+          cpu_tier=high
+          parallel_workers=8
+          {% elif ansible_facts['processor_count'] >= 4 %}
+          cpu_tier=medium
+          parallel_workers=4
+          {% else %}
+          cpu_tier=small
+          parallel_workers=2
+          {% endif %}
+
+    - name: Remove stale managed deployment markers
+      ansible.builtin.file:
+        path: >-
+          {{
+            deployment_marker_directory
+            ~ '/'
+            ~ item.name
+            ~ '-'
+            ~ deployment_marker_suffix
+          }}
+        state: absent
+      loop: "{{ application_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - ansible_facts['memtotal_mb'] | int < item.min_memory_mb | int
+
+    - name: Write eligible application deployment markers
+      ansible.builtin.copy:
+        dest: >-
+          {{
+            deployment_marker_directory
+            ~ '/'
+            ~ item.name
+            ~ '-'
+            ~ deployment_marker_suffix
+          }}
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          application={{ item.name }}
+          environment={{ item.environment }}
+          required_memory_mb={{ item.min_memory_mb }}
+          actual_memory_mb={{ ansible_facts['memtotal_mb'] }}
+          deployment_status=eligible
+      loop: "{{ application_entries }}"
+      loop_control:
+        label: >-
+          {{
+            item.name
+            ~ ' | requires='
+            ~ item.min_memory_mb
+            ~ 'MB'
+          }}
+      when:
+        - ansible_facts['memtotal_mb'] | int >= item.min_memory_mb | int
+
+    - name: Display application eligibility results
+      ansible.builtin.debug:
+        msg: >-
+          application={{ item.name }},
+          environment={{ item.environment }},
+          required_memory_mb={{ item.min_memory_mb }},
+          actual_memory_mb={{ ansible_facts['memtotal_mb'] }},
+          eligible={{
+            ansible_facts['memtotal_mb'] | int
+            >= item.min_memory_mb | int
+          }}
+      loop: "{{ application_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
