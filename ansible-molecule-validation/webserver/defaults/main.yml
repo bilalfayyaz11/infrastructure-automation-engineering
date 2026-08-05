@@ -1,0 +1,7 @@
+---
+webserver_package_name: apache2
+webserver_service_name: apache2
+webserver_document_root: /var/www/html
+webserver_port: 80
+webserver_page_title: Automated Web Server
+webserver_heading: Hello from Ansible Molecule

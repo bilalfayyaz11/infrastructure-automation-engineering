@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.retry
+.molecule/
+.cache/
+.DS_Store
+
+reports/*
+!reports/.gitkeep
+
+test-output.log

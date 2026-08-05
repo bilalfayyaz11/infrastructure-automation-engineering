@@ -1,0 +1,36 @@
+---
+dependency:
+  name: galaxy
+
+driver:
+  name: docker
+
+platforms:
+  - name: molecule-ubuntu
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    command: /lib/systemd/systemd
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+    published_ports:
+      - 0.0.0.0:8080:80/tcp
+
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: prepare.yml
+    converge: converge.yml
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+      stdout_callback: default
+      result_format: yaml
+
+verifier:
+  name: ansible

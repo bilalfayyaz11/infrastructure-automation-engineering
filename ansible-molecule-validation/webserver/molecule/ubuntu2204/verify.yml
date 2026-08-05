@@ -1,0 +1,99 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Gather installed package facts
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: Verify Apache package is installed
+      ansible.builtin.assert:
+        that:
+          - "'apache2' in ansible_facts.packages"
+        fail_msg: "Apache package verification failed."
+        success_msg: "Apache package is installed."
+
+    - name: Read Apache service state
+      ansible.builtin.systemd_service:
+        name: apache2
+      register: apache_service
+
+    - name: Verify Apache service is active
+      ansible.builtin.assert:
+        that:
+          - apache_service.status.ActiveState == "active"
+        fail_msg: >-
+          Apache service is not active.
+          Actual={{ apache_service.status.ActiveState | default('unknown') }}.
+        success_msg: "Apache service is active."
+
+    - name: Verify Apache service is enabled
+      ansible.builtin.assert:
+        that:
+          - apache_service.status.UnitFileState == "enabled"
+        fail_msg: >-
+          Apache service is not enabled.
+          Actual={{ apache_service.status.UnitFileState | default('unknown') }}.
+        success_msg: "Apache service is enabled."
+
+    - name: Verify Apache configuration syntax
+      ansible.builtin.command:
+        cmd: /usr/sbin/apache2ctl configtest
+      register: apache_config_test
+      changed_when: false
+      failed_when:
+        - apache_config_test.rc != 0
+
+    - name: Verify port 80 is listening
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 80
+        timeout: 15
+
+    - name: Inspect deployed index file
+      ansible.builtin.stat:
+        path: /var/www/html/index.html
+      register: index_file
+
+    - name: Verify index file exists with correct permissions
+      ansible.builtin.assert:
+        that:
+          - index_file.stat.exists
+          - index_file.stat.isreg
+          - index_file.stat.pw_name == "www-data"
+          - index_file.stat.gr_name == "www-data"
+          - index_file.stat.mode == "0644"
+        fail_msg: "The managed index file does not match the expected state."
+        success_msg: "The managed index file exists with correct ownership and permissions."
+
+    - name: Read deployed index content
+      ansible.builtin.slurp:
+        src: /var/www/html/index.html
+      register: index_content
+
+    - name: Verify expected page content
+      ansible.builtin.assert:
+        that:
+          - "'Hello from Ansible Molecule' in (index_content.content | b64decode)"
+          - "'Managed port: 80' in (index_content.content | b64decode)"
+        fail_msg: "The deployed page does not contain the expected content."
+        success_msg: "The deployed page contains the expected content."
+
+    - name: Request Apache endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        method: GET
+        return_content: true
+        status_code: 200
+      register: http_response
+
+    - name: Verify HTTP response
+      ansible.builtin.assert:
+        that:
+          - http_response.status == 200
+          - "'Hello from Ansible Molecule' in http_response.content"
+        fail_msg: "Apache HTTP verification failed."
+        success_msg: "Apache returned the expected HTTP response."
