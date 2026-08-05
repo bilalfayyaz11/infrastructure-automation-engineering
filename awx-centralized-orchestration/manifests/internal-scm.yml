@@ -1,0 +1,49 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: awx-internal-scm
+  namespace: awx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: awx-internal-scm
+  template:
+    metadata:
+      labels:
+        app: awx-internal-scm
+    spec:
+      containers:
+        - name: git-daemon
+          image: awx-internal-scm:1.0.0
+          imagePullPolicy: Never
+          ports:
+            - name: git
+              containerPort: 9418
+          readinessProbe:
+            tcpSocket:
+              port: git
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: awx-internal-scm
+  namespace: awx
+spec:
+  selector:
+    app: awx-internal-scm
+  ports:
+    - name: git
+      port: 9418
+      targetPort: git

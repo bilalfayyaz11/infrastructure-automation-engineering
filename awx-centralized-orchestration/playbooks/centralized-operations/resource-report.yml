@@ -1,0 +1,35 @@
+---
+- name: Generate centralized resource report
+  hosts: all
+  gather_facts: true
+
+  tasks:
+    - name: Read filesystem usage
+      ansible.builtin.command:
+        cmd: df -h /
+      register: filesystem_usage
+      changed_when: false
+
+    - name: Read memory usage
+      ansible.builtin.command:
+        cmd: free -h
+      register: memory_usage
+      changed_when: false
+
+    - name: Read highest CPU processes
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ps aux --sort=-%cpu | head -n 10
+      args:
+        executable: /bin/bash
+      register: process_usage
+      changed_when: false
+
+    - name: Display structured resource report
+      ansible.builtin.debug:
+        msg:
+          hostname: "{{ ansible_facts['hostname'] }}"
+          filesystem: "{{ filesystem_usage.stdout_lines }}"
+          memory: "{{ memory_usage.stdout_lines }}"
+          highest_cpu_processes: "{{ process_usage.stdout_lines }}"

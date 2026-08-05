@@ -1,0 +1,4 @@
+ansible-core==2.21.2
+awxkit==24.6.1
+PyYAML==6.0.3
+requests==2.34.2

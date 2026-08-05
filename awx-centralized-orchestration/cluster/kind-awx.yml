@@ -1,0 +1,18 @@
+---
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+name: awx-control
+
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: "0.0.0.0"
+        protocol: TCP
+      - containerPort: 30443
+        hostPort: 30443
+        listenAddress: "0.0.0.0"
+        protocol: TCP

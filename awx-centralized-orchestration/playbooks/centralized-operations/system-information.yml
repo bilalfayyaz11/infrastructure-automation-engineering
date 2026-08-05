@@ -1,0 +1,37 @@
+---
+- name: Gather centralized system information
+  hosts: all
+  gather_facts: true
+
+  tasks:
+    - name: Display system information
+      ansible.builtin.debug:
+        msg:
+          hostname: "{{ ansible_facts['hostname'] }}"
+          distribution: "{{ ansible_facts['distribution'] }}"
+          distribution_version: "{{ ansible_facts['distribution_version'] }}"
+          architecture: "{{ ansible_facts['architecture'] }}"
+          memory_mb: "{{ ansible_facts['memtotal_mb'] }}"
+          processor_count: "{{ ansible_facts['processor_count'] }}"
+
+    - name: Write stable execution marker
+      ansible.builtin.copy:
+        dest: /tmp/awx-system-information.marker
+        mode: "0644"
+        content: |
+          controller=platform-awx
+          job=system-information
+          status=completed
+
+    - name: Verify execution marker
+      ansible.builtin.stat:
+        path: /tmp/awx-system-information.marker
+      register: execution_marker
+
+    - name: Confirm successful centralized execution
+      ansible.builtin.assert:
+        that:
+          - execution_marker.stat.exists
+          - execution_marker.stat.isreg
+        fail_msg: "The AWX execution marker was not created."
+        success_msg: "System information automation completed successfully."
