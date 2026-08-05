@@ -1,0 +1,113 @@
+---
+- name: Deploy an Ansible-managed Nginx pod
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-app
+    image_name: nginx:1.27-alpine
+
+  tasks:
+    - name: Create Nginx content ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ app_name }}-config"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app: "{{ app_name }}"
+              managed-by: ansible
+          data:
+            index.html: |
+              <!DOCTYPE html>
+              <html>
+                <head>
+                  <title>Ansible and Kubernetes</title>
+                </head>
+                <body>
+                  <h1>Ansible-managed Kubernetes workload</h1>
+                  <p>This page is served by Nginx inside Minikube.</p>
+                </body>
+              </html>
+
+    - name: Deploy Nginx pod
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "{{ app_name }}-pod"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app: "{{ app_name }}"
+              managed-by: ansible
+          spec:
+            containers:
+              - name: nginx
+                image: "{{ image_name }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - name: http
+                    containerPort: 80
+                    protocol: TCP
+                resources:
+                  requests:
+                    cpu: 25m
+                    memory: 32Mi
+                  limits:
+                    cpu: 100m
+                    memory: 128Mi
+                volumeMounts:
+                  - name: web-content
+                    mountPath: /usr/share/nginx/html
+                    readOnly: true
+            volumes:
+              - name: web-content
+                configMap:
+                  name: "{{ app_name }}-config"
+            restartPolicy: Always
+      register: pod_result
+
+    - name: Create internal service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ app_name }}-service"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app: "{{ app_name }}"
+              managed-by: ansible
+          spec:
+            selector:
+              app: "{{ app_name }}"
+            ports:
+              - name: http
+                protocol: TCP
+                port: 80
+                targetPort: 80
+            type: ClusterIP
+      register: service_result
+
+    - name: Display deployment result
+      ansible.builtin.debug:
+        msg:
+          - "Pod: {{ pod_result.result.metadata.name }}"
+          - "Namespace: {{ pod_result.result.metadata.namespace }}"
+          - "Service: {{ service_result.result.metadata.name }}"
+          - "Image: {{ image_name }}"

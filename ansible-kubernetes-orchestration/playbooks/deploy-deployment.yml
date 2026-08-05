@@ -1,0 +1,121 @@
+---
+- name: Deploy scalable Nginx workload
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-deployment
+    image_name: nginx:1.27-alpine
+    replica_count: 3
+
+  tasks:
+    - name: Create Nginx Deployment
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 300
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app: "{{ app_name }}"
+              managed-by: ansible
+          spec:
+            replicas: "{{ replica_count }}"
+            revisionHistoryLimit: 3
+            selector:
+              matchLabels:
+                app: "{{ app_name }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ app_name }}"
+                  managed-by: ansible
+              spec:
+                containers:
+                  - name: nginx
+                    image: "{{ image_name }}"
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                      - name: http
+                        containerPort: 80
+                        protocol: TCP
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        cpu: 100m
+                        memory: 128Mi
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      initialDelaySeconds: 3
+                      periodSeconds: 5
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+      register: deployment_result
+
+    - name: Create NodePort service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ app_name }}-service"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app: "{{ app_name }}"
+              managed-by: ansible
+          spec:
+            selector:
+              app: "{{ app_name }}"
+            ports:
+              - name: http
+                protocol: TCP
+                port: 80
+                targetPort: 80
+            type: NodePort
+      register: service_result
+
+    - name: Retrieve Deployment information
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace_name }}"
+      register: deployment_info
+
+    - name: Validate Deployment status
+      ansible.builtin.assert:
+        that:
+          - deployment_info.resources | length == 1
+          - deployment_info.resources[0].status.readyReplicas | default(0) | int == replica_count | int
+          - deployment_info.resources[0].status.availableReplicas | default(0) | int == replica_count | int
+        fail_msg: "The Deployment did not reach the requested replica count."
+        success_msg: "All requested Deployment replicas are ready."
+
+    - name: Display Deployment result
+      ansible.builtin.debug:
+        msg:
+          - "Deployment: {{ deployment_info.resources[0].metadata.name }}"
+          - "Requested replicas: {{ replica_count }}"
+          - "Ready replicas: {{ deployment_info.resources[0].status.readyReplicas }}"
+          - "Available replicas: {{ deployment_info.resources[0].status.availableReplicas }}"
+          - "Service: {{ service_result.result.metadata.name }}"

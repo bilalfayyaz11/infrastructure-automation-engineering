@@ -1,0 +1,80 @@
+---
+- name: Remove Ansible-managed Kubernetes resources
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+
+  tasks:
+    - name: Delete Deployment
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: apps/v1
+        kind: Deployment
+        name: nginx-deployment
+        namespace: "{{ namespace_name }}"
+        state: absent
+        wait: true
+
+    - name: Delete Deployment service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Service
+        name: nginx-deployment-service
+        namespace: "{{ namespace_name }}"
+        state: absent
+
+    - name: Delete standalone pod
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Pod
+        name: nginx-app-pod
+        namespace: "{{ namespace_name }}"
+        state: absent
+        wait: true
+
+    - name: Delete standalone pod service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Service
+        name: nginx-app-service
+        namespace: "{{ namespace_name }}"
+        state: absent
+
+    - name: Delete ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: ConfigMap
+        name: nginx-app-config
+        namespace: "{{ namespace_name }}"
+        state: absent
+
+    - name: Delete namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+        state: absent
+        wait: true
+        wait_timeout: 300
+
+    - name: Verify namespace deletion
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+      register: namespace_check
+
+    - name: Confirm cleanup
+      ansible.builtin.assert:
+        that:
+          - namespace_check.resources | length == 0
+        fail_msg: "The namespace still exists."
+        success_msg: "All Ansible-managed Kubernetes resources were removed."

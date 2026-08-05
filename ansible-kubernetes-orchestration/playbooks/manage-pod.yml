@@ -1,0 +1,138 @@
+---
+- name: Manage Nginx pod lifecycle
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-app
+    image_name: nginx:1.27-alpine
+    pod_action: info
+
+  tasks:
+    - name: Validate requested action
+      ansible.builtin.assert:
+        that:
+          - pod_action in ['info', 'restart', 'delete']
+        fail_msg: "pod_action must be info, restart, or delete."
+
+    - name: Retrieve pod information
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Pod
+        name: "{{ app_name }}-pod"
+        namespace: "{{ namespace_name }}"
+      register: pod_info
+      when: pod_action == 'info'
+
+    - name: Confirm pod exists
+      ansible.builtin.assert:
+        that:
+          - pod_info.resources | length == 1
+        fail_msg: "The expected pod was not found."
+      when: pod_action == 'info'
+
+    - name: Display pod information
+      ansible.builtin.debug:
+        msg:
+          - "Pod: {{ pod_info.resources[0].metadata.name }}"
+          - "Status: {{ pod_info.resources[0].status.phase }}"
+          - "Pod IP: {{ pod_info.resources[0].status.podIP }}"
+          - "Node: {{ pod_info.resources[0].spec.nodeName }}"
+          - "Image: {{ pod_info.resources[0].spec.containers[0].image }}"
+      when:
+        - pod_action == 'info'
+        - pod_info.resources | length == 1
+
+    - name: Delete pod before controlled restart
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Pod
+        name: "{{ app_name }}-pod"
+        namespace: "{{ namespace_name }}"
+        state: absent
+        wait: true
+        wait_timeout: 180
+      when: pod_action == 'restart'
+
+    - name: Recreate pod after restart
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        state: present
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "{{ app_name }}-pod"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app: "{{ app_name }}"
+              managed-by: ansible
+          spec:
+            containers:
+              - name: nginx
+                image: "{{ image_name }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - name: http
+                    containerPort: 80
+                resources:
+                  requests:
+                    cpu: 25m
+                    memory: 32Mi
+                  limits:
+                    cpu: 100m
+                    memory: 128Mi
+                volumeMounts:
+                  - name: web-content
+                    mountPath: /usr/share/nginx/html
+                    readOnly: true
+            volumes:
+              - name: web-content
+                configMap:
+                  name: "{{ app_name }}-config"
+            restartPolicy: Always
+      when: pod_action == 'restart'
+
+    - name: Delete pod
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Pod
+        name: "{{ app_name }}-pod"
+        namespace: "{{ namespace_name }}"
+        state: absent
+        wait: true
+      when: pod_action == 'delete'
+
+    - name: Delete pod service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Service
+        name: "{{ app_name }}-service"
+        namespace: "{{ namespace_name }}"
+        state: absent
+      when: pod_action == 'delete'
+
+    - name: Delete pod ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: ConfigMap
+        name: "{{ app_name }}-config"
+        namespace: "{{ namespace_name }}"
+        state: absent
+      when: pod_action == 'delete'
+
+    - name: Display lifecycle result
+      ansible.builtin.debug:
+        msg: "Pod lifecycle action '{{ pod_action }}' completed."
+      when: pod_action in ['restart', 'delete']

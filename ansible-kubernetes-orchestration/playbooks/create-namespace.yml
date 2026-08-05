@@ -1,0 +1,24 @@
+---
+- name: Create Kubernetes application namespace
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+
+  tasks:
+    - name: Create application namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/config"
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+        state: present
+      register: namespace_result
+
+    - name: Display namespace result
+      ansible.builtin.debug:
+        msg:
+          - "Namespace: {{ namespace_result.result.metadata.name }}"
+          - "State: present"
+          - "Managed by: Ansible"
