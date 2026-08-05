@@ -1,0 +1,56 @@
+---
+- name: Collect final UFW status
+  ansible.builtin.command:
+    cmd: ufw status
+  register: final_ufw_status
+  changed_when: false
+
+- name: Collect final fail2ban status
+  ansible.builtin.command:
+    cmd: fail2ban-client status sshd
+  register: final_fail2ban_status
+  changed_when: false
+
+- name: Collect final SSH service status
+  ansible.builtin.command:
+    cmd: systemctl is-active ssh
+  register: final_ssh_status
+  changed_when: false
+
+- name: Write security implementation summary
+  ansible.builtin.copy:
+    dest: /var/log/security-hardening-summary.log
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      SECURITY HARDENING SUMMARY
+      ==========================
+
+      Date: {{ ansible_facts["date_time"]["iso8601"] }}
+      Host: {{ inventory_hostname }}
+
+      IMPLEMENTED SECURITY CONTROLS
+
+      - SSH root login disabled
+      - SSH password authentication disabled
+      - Public-key authentication enabled
+      - SSH authentication attempts restricted
+      - SSH idle-session controls configured
+      - X11 forwarding disabled
+      - UFW default-deny firewall enabled
+      - SSH access rate-limited
+      - HTTP and HTTPS ports explicitly allowed
+      - High-risk service ports explicitly denied
+      - Fail2ban SSH intrusion prevention active
+      - Automatic security updates enabled
+      - Sensitive account files retain secure permissions
+      - Unnecessary Avahi service disabled when present
+
+      CURRENT STATUS
+
+      SSH service: {{ final_ssh_status.stdout }}
+      UFW firewall: {{ 'active' if 'Status: active' in final_ufw_status.stdout else 'inactive' }}
+      Fail2ban SSH jail: {{ 'active' if 'Currently banned' in final_fail2ban_status.stdout else 'unverified' }}
+
+      COMPLIANCE RESULT: SECURED

@@ -1,0 +1,17 @@
+---
+ssh_hardening_dropin: /etc/ssh/sshd_config.d/99-security-hardening.conf
+ssh_backup_directory: /var/backups/ssh-security
+
+ssh_max_auth_tries: 3
+ssh_client_alive_interval: 300
+ssh_client_alive_count_max: 2
+
+firewall_ssh_port: 22
+firewall_http_port: 80
+firewall_https_port: 443
+
+approved_ssh_source: "REPLACE_WITH_ADMINISTRATION_PUBLIC_IP"
+
+fail2ban_max_retry: 3
+fail2ban_find_time: 600
+fail2ban_ban_time: 3600

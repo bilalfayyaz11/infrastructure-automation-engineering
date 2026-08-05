@@ -1,0 +1,9 @@
+---
+- name: Enforce Linux security baseline
+  hosts: local
+  connection: local
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: security-hardening

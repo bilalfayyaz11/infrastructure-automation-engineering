@@ -1,0 +1,4 @@
+---
+- name: Apply SSH security baseline
+  ansible.builtin.import_tasks:
+    file: ssh-hardening.yml

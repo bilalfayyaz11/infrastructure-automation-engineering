@@ -1,0 +1,79 @@
+---
+- name: Ensure OpenSSH server is installed
+  ansible.builtin.apt:
+    name: openssh-server
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure SSH backup directory exists
+  ansible.builtin.file:
+    path: "{{ ssh_backup_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check whether original SSH configuration backup exists
+  ansible.builtin.stat:
+    path: "{{ ssh_backup_directory }}/sshd_config.original"
+  register: ssh_original_backup
+
+- name: Preserve original SSH configuration
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: "{{ ssh_backup_directory }}/sshd_config.original"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - not ssh_original_backup.stat.exists
+
+- name: Ensure SSH drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install SSH security baseline
+  ansible.builtin.template:
+    src: 99-security-hardening.conf.j2
+    dest: "{{ ssh_hardening_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload SSH safely
+
+- name: Apply pending SSH configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure SSH service is enabled and running
+  ansible.builtin.systemd_service:
+    name: ssh
+    enabled: true
+    state: started
+
+- name: Read effective SSH configuration
+  ansible.builtin.command:
+    cmd: /usr/sbin/sshd -T
+  register: effective_ssh_configuration
+  changed_when: false
+
+- name: Validate required SSH security settings
+  ansible.builtin.assert:
+    that:
+      - "'permitrootlogin no' in effective_ssh_configuration.stdout"
+      - "'passwordauthentication no' in effective_ssh_configuration.stdout"
+      - "'kbdinteractiveauthentication no' in effective_ssh_configuration.stdout"
+      - "'pubkeyauthentication yes' in effective_ssh_configuration.stdout"
+      - "'permitemptypasswords no' in effective_ssh_configuration.stdout"
+      - "'maxauthtries 3' in effective_ssh_configuration.stdout"
+      - "'clientaliveinterval 300' in effective_ssh_configuration.stdout"
+      - "'clientalivecountmax 2' in effective_ssh_configuration.stdout"
+      - "'x11forwarding no' in effective_ssh_configuration.stdout"
+    fail_msg: "One or more SSH security settings were not enforced."
+    success_msg: "SSH security baseline is active."

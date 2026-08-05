@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.retry
+*.log
+.DS_Store
+
+current-ssh-source.txt
+roles/security-hardening/defaults/main.yml
+
+security-compliance-report.txt
+security-hardening-summary.log

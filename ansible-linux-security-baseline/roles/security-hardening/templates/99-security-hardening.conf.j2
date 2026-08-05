@@ -1,0 +1,19 @@
+# Managed by Ansible
+
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+
+MaxAuthTries {{ ssh_max_auth_tries }}
+ClientAliveInterval {{ ssh_client_alive_interval }}
+ClientAliveCountMax {{ ssh_client_alive_count_max }}
+
+X11Forwarding no
+AllowTcpForwarding yes
+AllowAgentForwarding no
+
+LoginGraceTime 30
+MaxSessions 5
+UseDNS no

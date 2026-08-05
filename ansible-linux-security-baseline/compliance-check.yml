@@ -1,0 +1,74 @@
+---
+- name: Validate Linux security compliance
+  hosts: local
+  connection: local
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Read effective SSH configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -T
+      register: ssh_effective
+      changed_when: false
+
+    - name: Read UFW status
+      ansible.builtin.command:
+        cmd: ufw status verbose
+      register: ufw_status
+      changed_when: false
+
+    - name: Read fail2ban SSH jail status
+      ansible.builtin.command:
+        cmd: fail2ban-client status sshd
+      register: fail2ban_status
+      changed_when: false
+
+    - name: Check SSH service
+      ansible.builtin.command:
+        cmd: systemctl is-active ssh
+      register: ssh_service
+      changed_when: false
+
+    - name: Check fail2ban service
+      ansible.builtin.command:
+        cmd: systemctl is-active fail2ban
+      register: fail2ban_service
+      changed_when: false
+
+    - name: Read automatic update configuration
+      ansible.builtin.slurp:
+        src: /etc/apt/apt.conf.d/20auto-upgrades
+      register: automatic_updates
+
+    - name: Validate complete security baseline
+      ansible.builtin.assert:
+        that:
+          - "'permitrootlogin no' in ssh_effective.stdout"
+          - "'passwordauthentication no' in ssh_effective.stdout"
+          - "'pubkeyauthentication yes' in ssh_effective.stdout"
+          - "'permitemptypasswords no' in ssh_effective.stdout"
+          - "'maxauthtries 3' in ssh_effective.stdout"
+          - "'clientaliveinterval 300' in ssh_effective.stdout"
+          - "'clientalivecountmax 2' in ssh_effective.stdout"
+          - "'x11forwarding no' in ssh_effective.stdout"
+          - "'Status: active' in ufw_status.stdout"
+          - "'Currently banned' in fail2ban_status.stdout"
+          - ssh_service.stdout == "active"
+          - fail2ban_service.stdout == "active"
+          - "'Unattended-Upgrade \"1\"' in (automatic_updates.content | b64decode)"
+        fail_msg: "One or more mandatory security controls failed."
+        success_msg: "All mandatory security controls passed."
+
+    - name: Display compliance results
+      ansible.builtin.debug:
+        msg:
+          - "SSH root login disabled: PASS"
+          - "SSH password authentication disabled: PASS"
+          - "SSH public-key authentication enabled: PASS"
+          - "SSH authentication attempts restricted: PASS"
+          - "SSH idle-session controls applied: PASS"
+          - "UFW firewall active: PASS"
+          - "Fail2ban SSH jail active: PASS"
+          - "Automatic security updates enabled: PASS"
+          - "SSH service active: PASS"
