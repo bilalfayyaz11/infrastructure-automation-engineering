@@ -1,0 +1,131 @@
+---
+- name: Deploy web application through Ansible
+  hosts: webservers
+  gather_facts: true
+  become: true
+
+  vars:
+    application_name: automated-webapp
+    application_path: /var/www/automated-webapp
+    nginx_site_path: /etc/nginx/sites-available/automated-webapp
+    nginx_enabled_path: /etc/nginx/sites-enabled/automated-webapp
+
+    build_number: >-
+      {{
+        lookup('env', 'BUILD_NUMBER')
+        | default('manual', true)
+      }}
+
+    deployment_environment: >-
+      {{
+        lookup('env', 'DEPLOYMENT_ENVIRONMENT')
+        | default('development', true)
+      }}
+
+    app_version: >-
+      {{
+        lookup('env', 'APP_VERSION')
+        | default('1.0.0', true)
+      }}
+
+  tasks:
+    - name: Ensure Nginx is installed
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create application directory
+      ansible.builtin.file:
+        path: "{{ application_path }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+
+    - name: Render application page
+      ansible.builtin.template:
+        src: ../templates/index.html.j2
+        dest: "{{ application_path }}/index.html"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      notify: Validate and reload Nginx
+
+    - name: Install Nginx virtual host
+      ansible.builtin.copy:
+        src: ../files/nginx-webapp.conf
+        dest: "{{ nginx_site_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Validate and reload Nginx
+
+    - name: Enable application virtual host
+      ansible.builtin.file:
+        src: "{{ nginx_site_path }}"
+        dest: "{{ nginx_enabled_path }}"
+        state: link
+        force: true
+      notify: Validate and reload Nginx
+
+    - name: Remove default Nginx virtual host
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Validate and reload Nginx
+
+    - name: Ensure Nginx is enabled and running
+      ansible.builtin.systemd_service:
+        name: nginx
+        enabled: true
+        state: started
+
+    - name: Apply pending Nginx changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Verify application HTTP response
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        status_code: 200
+        return_content: true
+      register: application_response
+      retries: 10
+      delay: 2
+      until:
+        - application_response.status == 200
+        - "'Application Deployed Successfully' in application_response.content"
+
+    - name: Verify health endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1/health
+        status_code: 200
+        return_content: true
+      register: health_response
+      failed_when:
+        - health_response.status != 200
+        - "'healthy' not in health_response.content"
+
+    - name: Display deployment result
+      ansible.builtin.debug:
+        msg:
+          - "Application: {{ application_name }}"
+          - "Build: {{ build_number }}"
+          - "Environment: {{ deployment_environment }}"
+          - "Version: {{ app_version }}"
+          - "Application URL: http://127.0.0.1/"
+          - "Health URL: http://127.0.0.1/health"
+
+  handlers:
+    - name: Validate Nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+      listen: Validate and reload Nginx
+
+    - name: Reload Nginx
+      ansible.builtin.systemd_service:
+        name: nginx
+        state: reloaded
+      listen: Validate and reload Nginx

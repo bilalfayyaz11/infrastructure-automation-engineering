@@ -1,0 +1,8 @@
+[webservers]
+localhost ansible_connection=local
+
+[webservers:vars]
+ansible_become=true
+ansible_become_method=sudo
+ansible_become_user=root
+ansible_become_exe=sudo

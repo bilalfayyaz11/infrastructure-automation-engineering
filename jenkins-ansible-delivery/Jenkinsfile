@@ -1,0 +1,195 @@
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+
+        buildDiscarder(
+            logRotator(
+                numToKeepStr: '10',
+                artifactNumToKeepStr: '5'
+            )
+        )
+    }
+
+    parameters {
+        choice(
+            name: 'DEPLOYMENT_ENVIRONMENT',
+            choices: [
+                'development',
+                'staging',
+                'production'
+            ],
+            description: 'Target deployment environment'
+        )
+
+        string(
+            name: 'APP_VERSION',
+            defaultValue: '1.0.0',
+            description: 'Application version'
+        )
+
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Skip post-deployment tests'
+        )
+    }
+
+    environment {
+        PROJECT_DIR = '/var/lib/jenkins/deployment-automation'
+        ANSIBLE_CONFIG = '/var/lib/jenkins/deployment-automation/ansible.cfg'
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
+    }
+
+    stages {
+        stage('Preparation') {
+            steps {
+                sh '''
+                    #!/usr/bin/env bash
+                    set -eu
+
+                    cd "${PROJECT_DIR}"
+
+                    echo "Build: ${BUILD_NUMBER}"
+                    echo "Environment: ${DEPLOYMENT_ENVIRONMENT:-development}"
+                    echo "Version: ${APP_VERSION:-1.0.0}"
+
+                    ansible --version
+
+                    find . \
+                      -maxdepth 3 \
+                      -type f \
+                      ! -path './jenkins/admin-credential.txt' \
+                      | sort
+                '''
+            }
+        }
+
+        stage('Validate Automation') {
+            steps {
+                sh '''
+                    #!/usr/bin/env bash
+                    set -eu
+
+                    cd "${PROJECT_DIR}"
+
+                    ansible-inventory \
+                      --inventory inventory/hosts \
+                      --graph
+
+                    ansible-playbook \
+                      --syntax-check \
+                      playbooks/deploy-webapp.yml
+
+                    ansible \
+                      webservers \
+                      -m ansible.builtin.ping \
+                      -e ansible_become=false
+                '''
+            }
+        }
+
+        stage('Deploy Application') {
+            steps {
+                sh '''
+                    #!/usr/bin/env bash
+                    set -eu
+
+                    sudo /usr/local/sbin/run-ansible-web-deployment \
+                      "${BUILD_NUMBER}" \
+                      "${DEPLOYMENT_ENVIRONMENT:-development}" \
+                      "${APP_VERSION:-1.0.0}"
+                '''
+            }
+        }
+
+        stage('Verify Deployment') {
+            when {
+                expression {
+                    return !params.SKIP_TESTS
+                }
+            }
+
+            steps {
+                sh '''
+                    #!/usr/bin/env bash
+                    set -eu
+
+                    cd "${PROJECT_DIR}"
+                    scripts/test-deployment.sh
+                '''
+            }
+        }
+
+        stage('Validate Metadata') {
+            steps {
+                sh '''
+                    #!/usr/bin/env bash
+                    set -eu
+
+                    RESPONSE=$(mktemp)
+
+                    curl -fsS \
+                      http://127.0.0.1/ \
+                      > "${RESPONSE}"
+
+                    grep -Fq \
+                      "<strong>Build Number:</strong> ${BUILD_NUMBER}" \
+                      "${RESPONSE}"
+
+                    grep -Fq \
+                      "<strong>Environment:</strong> ${DEPLOYMENT_ENVIRONMENT:-development}" \
+                      "${RESPONSE}"
+
+                    grep -Fq \
+                      "<strong>Application Version:</strong> ${APP_VERSION:-1.0.0}" \
+                      "${RESPONSE}"
+
+                    rm -f "${RESPONSE}"
+
+                    echo "Deployment metadata validation passed"
+                '''
+            }
+        }
+
+        stage('Health Summary') {
+            steps {
+                sh '''
+                    #!/usr/bin/env bash
+                    set -eu
+
+                    systemctl is-active nginx
+
+                    HTTP_CODE=$(curl -fsS \
+                      -o /dev/null \
+                      -w '%{http_code}' \
+                      http://127.0.0.1/)
+
+                    test "${HTTP_CODE}" = "200"
+
+                    curl -fsS \
+                      http://127.0.0.1/health \
+                      | grep -q "healthy"
+
+                    echo "Application HTTP status: ${HTTP_CODE}"
+                    echo "Application health: healthy"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Deployment pipeline completed successfully'
+        }
+
+        failure {
+            echo 'Deployment pipeline failed'
+        }
+
+        always {
+            echo "Build ${env.BUILD_NUMBER} finished with status ${currentBuild.currentResult}"
+        }
+    }
+}
