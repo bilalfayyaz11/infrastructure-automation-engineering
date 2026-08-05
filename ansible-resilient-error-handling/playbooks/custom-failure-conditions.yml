@@ -1,0 +1,77 @@
+---
+- name: Demonstrate custom failure and change detection
+  hosts: local
+  connection: local
+  gather_facts: false
+
+  vars:
+    disk_usage_limit: 95
+    simulated_disk_usage: 42
+    simulated_service_state: active
+    expected_service_state: active
+    simulated_response_code: 200
+    expected_response_code: 200
+    simulated_response_body: healthy
+
+  tasks:
+    - name: Parse numeric disk usage output
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          printf '%s\n' "{{ simulated_disk_usage }}"
+      args:
+        executable: /bin/sh
+      register: disk_usage_result
+      changed_when: false
+      failed_when:
+        - disk_usage_result.stdout | int > disk_usage_limit | int
+
+    - name: Display numeric threshold result
+      ansible.builtin.debug:
+        msg: >-
+          Disk threshold check passed:
+          actual={{ disk_usage_result.stdout | int }}%,
+          maximum={{ disk_usage_limit | int }}%.
+
+    - name: Modify an audit marker without reporting changed
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          printf 'validated=%s\n' "$(date --iso-8601=seconds)" \
+            > /tmp/ansible-custom-change-marker.txt
+      args:
+        executable: /bin/sh
+      register: audit_marker_result
+      changed_when: false
+
+    - name: Confirm custom unchanged result
+      ansible.builtin.debug:
+        msg: >-
+          Audit marker command rc={{ audit_marker_result.rc }},
+          Ansible changed={{ audit_marker_result.changed }}.
+
+    - name: Evaluate multiple independent failure conditions
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          printf 'state=%s\n' "{{ simulated_service_state }}"
+          printf 'code=%s\n' "{{ simulated_response_code }}"
+          printf 'body=%s\n' "{{ simulated_response_body }}"
+      args:
+        executable: /bin/sh
+      register: combined_check_result
+      changed_when: false
+      failed_when: >
+        simulated_service_state != expected_service_state
+        or
+        simulated_response_code | int != expected_response_code | int
+        or
+        'healthy' not in simulated_response_body
+
+    - name: Display multi-condition success
+      ansible.builtin.debug:
+        msg:
+          - "Service state: {{ simulated_service_state }}"
+          - "Response code: {{ simulated_response_code }}"
+          - "Response body: {{ simulated_response_body }}"
+          - "All custom failure conditions passed."

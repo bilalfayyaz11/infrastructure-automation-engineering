@@ -1,0 +1,297 @@
+---
+- name: Simulate resilient local application deployment
+  hosts: local
+  connection: local
+  gather_facts: true
+
+  vars:
+    deployment_root: /tmp/resilient-application
+    deployment_log_directory: /tmp/deployment-logs
+    deployment_run_log: /tmp/deployment-logs/run.log
+    retry_counter_file: /tmp/deployment-counter
+    retry_target: 3
+
+    force_precondition_failure: false
+    force_dependency_failure: false
+    force_deployment_failure: false
+    force_health_failure: false
+
+  pre_tasks:
+    - name: Reset deployment log directory
+      ansible.builtin.file:
+        path: "{{ deployment_log_directory }}"
+        state: absent
+
+    - name: Create deployment log directory
+      ansible.builtin.file:
+        path: "{{ deployment_log_directory }}"
+        state: directory
+        mode: "0755"
+
+    - name: Reset retry counter
+      ansible.builtin.file:
+        path: "{{ retry_counter_file }}"
+        state: absent
+
+    - name: Initialize shared run log
+      ansible.builtin.copy:
+        dest: "{{ deployment_run_log }}"
+        content: ""
+        mode: "0644"
+
+  tasks:
+    - name: Execute precondition validation stage
+      block:
+        - name: Record precondition stage start
+          ansible.builtin.set_fact:
+            precondition_stage_status: RUNNING
+
+        - name: Validate available disk space
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              df -Pm /tmp | awk 'NR == 2 {print $4}'
+          args:
+            executable: /bin/sh
+          register: available_disk_mb
+          changed_when: false
+          failed_when:
+            - available_disk_mb.stdout | int < 100
+
+        - name: Force precondition failure when requested
+          ansible.builtin.fail:
+            msg: >-
+              Forced precondition failure:
+              force_precondition_failure={{ force_precondition_failure }}.
+          when:
+            - force_precondition_failure | bool
+
+        - name: Mark precondition stage successful
+          ansible.builtin.set_fact:
+            precondition_stage_status: PASSED
+
+      rescue:
+        - name: Mark precondition stage failed
+          ansible.builtin.set_fact:
+            precondition_stage_status: FAILED
+
+        - name: Write precondition failure record
+          ansible.builtin.copy:
+            dest: "{{ deployment_log_directory }}/precondition-failure.log"
+            mode: "0644"
+            content: |
+              stage=precondition-validation
+              timestamp={{ ansible_facts["date_time"]["iso8601"] }}
+              status=FAILED
+              message={{ ansible_failed_result.msg | default('Unknown precondition failure') }}
+
+      always:
+        - name: Append precondition stage status
+          ansible.builtin.lineinfile:
+            path: "{{ deployment_run_log }}"
+            line: >-
+              stage=precondition-validation
+              status={{ precondition_stage_status | default('FAILED') }}
+            create: true
+            mode: "0644"
+
+    - name: Execute dependency validation stage
+      block:
+        - name: Record dependency stage start
+          ansible.builtin.set_fact:
+            dependency_stage_status: RUNNING
+
+        - name: Verify required commands
+          ansible.builtin.command:
+            cmd: "command -v {{ item }}"
+          args:
+            executable: /bin/sh
+          loop:
+            - python3
+            - curl
+            - awk
+          changed_when: false
+
+        - name: Force dependency failure when requested
+          ansible.builtin.fail:
+            msg: >-
+              Forced dependency failure:
+              force_dependency_failure={{ force_dependency_failure }}.
+          when:
+            - force_dependency_failure | bool
+
+        - name: Mark dependency stage successful
+          ansible.builtin.set_fact:
+            dependency_stage_status: PASSED
+
+      rescue:
+        - name: Mark dependency stage failed
+          ansible.builtin.set_fact:
+            dependency_stage_status: FAILED
+
+        - name: Write dependency failure record
+          ansible.builtin.copy:
+            dest: "{{ deployment_log_directory }}/dependency-failure.log"
+            mode: "0644"
+            content: |
+              stage=dependency-validation
+              timestamp={{ ansible_facts["date_time"]["iso8601"] }}
+              status=FAILED
+              message={{ ansible_failed_result.msg | default('Unknown dependency failure') }}
+
+      always:
+        - name: Append dependency stage status
+          ansible.builtin.lineinfile:
+            path: "{{ deployment_run_log }}"
+            line: >-
+              stage=dependency-validation
+              status={{ dependency_stage_status | default('FAILED') }}
+            create: true
+            mode: "0644"
+
+    - name: Execute application deployment stage
+      block:
+        - name: Record deployment stage start
+          ansible.builtin.set_fact:
+            deployment_stage_status: RUNNING
+
+        - name: Create application directory
+          ansible.builtin.file:
+            path: "{{ deployment_root }}"
+            state: directory
+            mode: "0755"
+
+        - name: Deploy application file
+          ansible.builtin.copy:
+            dest: "{{ deployment_root }}/application.txt"
+            mode: "0644"
+            content: |
+              application=resilient-local-service
+              version=1.0.0
+              deployed_at={{ ansible_facts["date_time"]["iso8601"] }}
+
+        - name: Force deployment failure when requested
+          ansible.builtin.fail:
+            msg: >-
+              Forced application deployment failure:
+              force_deployment_failure={{ force_deployment_failure }}.
+          when:
+            - force_deployment_failure | bool
+
+        - name: Mark deployment stage successful
+          ansible.builtin.set_fact:
+            deployment_stage_status: PASSED
+
+      rescue:
+        - name: Mark deployment stage failed
+          ansible.builtin.set_fact:
+            deployment_stage_status: FAILED
+
+        - name: Write deployment failure record
+          ansible.builtin.copy:
+            dest: "{{ deployment_log_directory }}/application-deployment-failure.log"
+            mode: "0644"
+            content: |
+              stage=application-deployment
+              timestamp={{ ansible_facts["date_time"]["iso8601"] }}
+              status=FAILED
+              message={{ ansible_failed_result.msg | default('Unknown deployment failure') }}
+
+      always:
+        - name: Append deployment stage status
+          ansible.builtin.lineinfile:
+            path: "{{ deployment_run_log }}"
+            line: >-
+              stage=application-deployment
+              status={{ deployment_stage_status | default('FAILED') }}
+            create: true
+            mode: "0644"
+
+    - name: Execute health verification stage
+      block:
+        - name: Record health stage start
+          ansible.builtin.set_fact:
+            health_stage_status: RUNNING
+
+        - name: Simulate unreliable health dependency
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+
+              counter_file="{{ retry_counter_file }}"
+
+              if [ -f "$counter_file" ]; then
+                current_count=$(cat "$counter_file")
+              else
+                current_count=0
+              fi
+
+              next_count=$((current_count + 1))
+              printf '%s\n' "$next_count" > "$counter_file"
+
+              echo "attempt=$next_count target={{ retry_target }}"
+
+              if [ "$next_count" -lt "{{ retry_target }}" ]; then
+                exit 1
+              fi
+          args:
+            executable: /bin/sh
+          register: retry_health_result
+          changed_when: false
+          retries: 3
+          delay: 1
+          until:
+            - retry_health_result.rc == 0
+
+        - name: Verify deployed application file
+          ansible.builtin.stat:
+            path: "{{ deployment_root }}/application.txt"
+          register: deployed_application_file
+          failed_when:
+            - not deployed_application_file.stat.exists
+
+        - name: Force health failure when requested
+          ansible.builtin.fail:
+            msg: >-
+              Forced health verification failure:
+              force_health_failure={{ force_health_failure }}.
+          when:
+            - force_health_failure | bool
+
+        - name: Mark health stage successful
+          ansible.builtin.set_fact:
+            health_stage_status: PASSED
+
+      rescue:
+        - name: Mark health stage failed
+          ansible.builtin.set_fact:
+            health_stage_status: FAILED
+
+        - name: Write health failure record
+          ansible.builtin.copy:
+            dest: "{{ deployment_log_directory }}/health-verification-failure.log"
+            mode: "0644"
+            content: |
+              stage=health-verification
+              timestamp={{ ansible_facts["date_time"]["iso8601"] }}
+              status=FAILED
+              message={{ ansible_failed_result.msg | default('Unknown health failure') }}
+
+      always:
+        - name: Append health stage status
+          ansible.builtin.lineinfile:
+            path: "{{ deployment_run_log }}"
+            line: >-
+              stage=health-verification
+              status={{ health_stage_status | default('FAILED') }}
+            create: true
+            mode: "0644"
+
+    - name: Read shared deployment log
+      ansible.builtin.slurp:
+        src: "{{ deployment_run_log }}"
+      register: deployment_run_log_content
+
+    - name: Display final deployment run log
+      ansible.builtin.debug:
+        msg: "{{ deployment_run_log_content.content | b64decode }}"

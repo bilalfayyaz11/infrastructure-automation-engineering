@@ -1,0 +1,85 @@
+---
+- name: Demonstrate explicit debugging and precondition enforcement
+  hosts: local
+  connection: local
+  gather_facts: false
+
+  vars:
+    application_name: resilient-api
+    available_memory_mb: 4096
+    minimum_memory_mb: 2048
+    deployment_enabled: true
+    deployment_environment: staging
+    allowed_environments:
+      - development
+      - staging
+      - production
+    service_configuration:
+      port: 8080
+      protocol: http
+      workers: 3
+
+  tasks:
+    - name: Capture the current kernel release
+      ansible.builtin.command:
+        cmd: uname -r
+      register: kernel_command
+      changed_when: false
+
+    - name: Print a raw dictionary variable
+      ansible.builtin.debug:
+        var: service_configuration
+
+    - name: Print a formatted deployment message
+      ansible.builtin.debug:
+        msg: >-
+          Preparing {{ application_name }} for
+          {{ deployment_environment }} with
+          {{ available_memory_mb }} MB available memory.
+
+    - name: Print conditional deployment state
+      ansible.builtin.debug:
+        msg: "Deployment execution is currently enabled."
+      when:
+        - deployment_enabled | bool
+
+    - name: Print verbose diagnostic information
+      ansible.builtin.debug:
+        msg: >-
+          Verbose diagnostic: kernel={{ kernel_command.stdout }},
+          workers={{ service_configuration.workers }},
+          endpoint={{ service_configuration.protocol }}://127.0.0.1:{{ service_configuration.port }}
+        verbosity: 1
+
+    - name: Reject insufficient memory
+      ansible.builtin.fail:
+        msg: >-
+          Memory precondition failed:
+          actual={{ available_memory_mb }} MB,
+          expected_at_least={{ minimum_memory_mb }} MB.
+      when:
+        - available_memory_mb | int < minimum_memory_mb | int
+
+    - name: Reject unsupported deployment environment
+      ansible.builtin.fail:
+        msg: >-
+          Environment precondition failed:
+          actual={{ deployment_environment }},
+          expected_one_of={{ allowed_environments | join(', ') }}.
+      when:
+        - deployment_environment not in allowed_environments
+
+    - name: Reject disabled deployment execution
+      ansible.builtin.fail:
+        msg: >-
+          Boolean precondition failed:
+          deployment_enabled={{ deployment_enabled | bool }},
+          expected=true.
+      when:
+        - not deployment_enabled | bool
+
+    - name: Display successful precondition result
+      ansible.builtin.debug:
+        msg: >-
+          All preconditions passed for {{ application_name }}.
+          Kernel command result={{ kernel_command.stdout }}.

@@ -1,0 +1,65 @@
+---
+- name: Generate structured deployment error report
+  hosts: local
+  connection: local
+  gather_facts: false
+
+  vars:
+    deployment_log_directory: /tmp/deployment-logs
+    deployment_run_log: /tmp/deployment-logs/run.log
+
+  tasks:
+    - name: Find deployment log files
+      ansible.builtin.find:
+        paths: "{{ deployment_log_directory }}"
+        file_type: file
+        recurse: false
+      register: deployment_log_files
+
+    - name: Read all deployment log files
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ deployment_log_files.files }}"
+      register: deployment_log_contents
+
+    - name: Initialize report facts
+      ansible.builtin.set_fact:
+        failure_files: []
+        run_log_lines: []
+
+    - name: Build failure file list
+      ansible.builtin.set_fact:
+        failure_files: "{{ failure_files + [item.source] }}"
+      loop: "{{ deployment_log_contents.results }}"
+      when:
+        - "'FAILED' in (item.content | b64decode)"
+
+    - name: Read shared run log
+      ansible.builtin.slurp:
+        src: "{{ deployment_run_log }}"
+      register: shared_run_log
+
+    - name: Build structured summary dictionary
+      ansible.builtin.set_fact:
+        deployment_summary:
+          total_log_files: "{{ deployment_log_files.matched | int }}"
+          run_log_lines: >-
+            {{
+              (shared_run_log.content | b64decode).splitlines()
+              | reject('equalto', '')
+              | list
+            }}
+          status: "{{ 'FAIL' if failure_files | length > 0 else 'PASS' }}"
+          failure_files: "{{ failure_files }}"
+
+    - name: Stop when failure markers exist
+      ansible.builtin.fail:
+        msg: >-
+          Deployment report failed because FAILED markers were found in:
+          {{ failure_files | join(', ') }}.
+      when:
+        - deployment_summary.status == "FAIL"
+
+    - name: Display successful deployment summary
+      ansible.builtin.debug:
+        msg: "{{ deployment_summary }}"
