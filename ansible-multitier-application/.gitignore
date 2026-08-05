@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.DS_Store
+
+group_vars/all/main.yml
+
+*.retry
+.vault-password
+vault-password.txt

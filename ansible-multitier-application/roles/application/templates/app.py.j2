@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import mysql.connector
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+
+DB_CONFIG = {
+    "host": os.environ["DB_HOST"],
+    "port": int(os.environ["DB_PORT"]),
+    "user": os.environ["DB_USER"],
+    "password": os.environ["DB_PASSWORD"],
+    "database": os.environ["DB_NAME"],
+}
+
+
+def get_connection() -> mysql.connector.MySQLConnection:
+    return mysql.connector.connect(**DB_CONFIG)
+
+
+@app.get("/health")
+def health() -> tuple[Any, int]:
+    return jsonify(
+        {
+            "service": "{{ application_name }}",
+            "status": "healthy",
+        }
+    ), 200
+
+
+@app.get("/api/tasks")
+def list_tasks() -> tuple[Any, int]:
+    connection = get_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                title,
+                description,
+                status,
+                created_at
+            FROM tasks
+            ORDER BY id
+            """
+        )
+        tasks = cursor.fetchall()
+
+        for task in tasks:
+            if task.get("created_at") is not None:
+                task["created_at"] = task["created_at"].isoformat()
+
+        return jsonify(tasks), 200
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.post("/api/tasks")
+def create_task() -> tuple[Any, int]:
+    payload = request.get_json(silent=True) or {}
+
+    title = str(payload.get("title", "")).strip()
+    description = str(payload.get("description", "")).strip()
+    status = str(payload.get("status", "pending")).strip()
+
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+
+    allowed_statuses = {
+        "pending",
+        "in_progress",
+        "completed",
+    }
+
+    if status not in allowed_statuses:
+        return jsonify(
+            {
+                "error": "invalid status",
+                "allowed": sorted(allowed_statuses),
+            }
+        ), 400
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO tasks (
+                title,
+                description,
+                status
+            )
+            VALUES (%s, %s, %s)
+            """,
+            (
+                title,
+                description or None,
+                status,
+            ),
+        )
+
+        connection.commit()
+        task_id = cursor.lastrowid
+
+        return jsonify(
+            {
+                "id": task_id,
+                "title": title,
+                "description": description or None,
+                "status": status,
+            }
+        ), 201
+    finally:
+        cursor.close()
+        connection.close()
+
+
+if __name__ == "__main__":
+    app.run(
+        host="127.0.0.1",
+        port={{ application_port }},
+    )

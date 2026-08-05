@@ -1,0 +1,137 @@
+---
+- name: Ensure MySQL packages are installed
+  ansible.builtin.apt:
+    name:
+      - mysql-server
+      - mysql-client
+      - python3-pymysql
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure MySQL is enabled and running
+  ansible.builtin.systemd_service:
+    name: mysql
+    enabled: true
+    state: started
+
+- name: Install application-specific MySQL server configuration
+  ansible.builtin.template:
+    src: todoapp-server.cnf.j2
+    dest: /etc/mysql/mysql.conf.d/todoapp.cnf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart MySQL safely
+
+- name: Apply pending MySQL configuration changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Create application database
+  ansible.mysql.mysql_db:
+    name: "{{ database_name }}"
+    state: present
+    encoding: utf8mb4
+    collation: utf8mb4_unicode_ci
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    check_implicit_admin: true
+
+- name: Create restricted application database user
+  ansible.mysql.mysql_user:
+    name: "{{ database_user }}"
+    password: "{{ database_password }}"
+    host: "{{ database_host }}"
+    priv: "{{ database_name }}.*:ALL"
+    state: present
+    append_privs: false
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    check_implicit_admin: true
+  no_log: true
+
+- name: Install application MySQL client configuration
+  ansible.builtin.template:
+    src: todoapp-client.cnf.j2
+    dest: /root/.todoapp-my.cnf
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Render database schema
+  ansible.builtin.template:
+    src: schema.sql.j2
+    dest: /tmp/todoapp-schema.sql
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Check whether tasks table exists
+  ansible.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_db: "{{ database_name }}"
+    query: |
+      SELECT COUNT(*) AS table_count
+      FROM information_schema.tables
+      WHERE table_schema = '{{ database_name }}'
+        AND table_name = 'tasks';
+  register: tasks_table_check
+  changed_when: false
+
+- name: Import initial database schema
+  ansible.mysql.mysql_db:
+    name: "{{ database_name }}"
+    state: import
+    target: /tmp/todoapp-schema.sql
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+  when:
+    - tasks_table_check.query_result[0][0].table_count | int == 0
+
+- name: Apply idempotent seed data
+  ansible.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_db: "{{ database_name }}"
+    query:
+      - |
+        INSERT IGNORE INTO tasks (
+          id,
+          title,
+          description,
+          status
+        )
+        VALUES (
+          1,
+          'Verify database tier',
+          'Confirm that Ansible created the MySQL schema.',
+          'completed'
+        );
+      - |
+        INSERT IGNORE INTO tasks (
+          id,
+          title,
+          description,
+          status
+        )
+        VALUES (
+          2,
+          'Deploy application tier',
+          'Configure the Flask API and Gunicorn service.',
+          'pending'
+        );
+  when:
+    - tasks_table_check.query_result[0][0].table_count | int > 0
+
+- name: Retrieve tasks table structure
+  ansible.mysql.mysql_query:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_db: "{{ database_name }}"
+    query: DESCRIBE tasks;
+  register: tasks_table_structure
+  changed_when: false
+
+- name: Validate exact database columns
+  ansible.builtin.assert:
+    that:
+      - tasks_table_structure.query_result[0] | length == 5
+      - tasks_table_structure.query_result[0] | map(attribute='Field') | list == ['id', 'title', 'description', 'status', 'created_at']
+    fail_msg: "The tasks table does not contain the expected five columns."
+    success_msg: "The tasks table contains the expected five-column schema."

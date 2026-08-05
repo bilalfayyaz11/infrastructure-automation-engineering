@@ -1,0 +1,97 @@
+---
+- name: Ensure Nginx is installed
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure frontend directory exists
+  ansible.builtin.file:
+    path: "{{ web_root }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: Deploy static frontend
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: "{{ web_root }}/index.html"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+
+- name: Install Nginx virtual host
+  ansible.builtin.template:
+    src: todo-app.conf.j2
+    dest: /etc/nginx/sites-available/todo-app
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx safely
+
+- name: Enable application virtual host
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/todo-app
+    dest: /etc/nginx/sites-enabled/todo-app
+    state: link
+  notify: Reload Nginx safely
+
+- name: Remove default Nginx virtual host
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload Nginx safely
+
+- name: Apply pending Nginx changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure Nginx is enabled and running
+  ansible.builtin.systemd_service:
+    name: nginx
+    enabled: true
+    state: started
+
+- name: Verify frontend response
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ web_server_port }}/"
+    status_code: 200
+    return_content: true
+  register: frontend_response
+  retries: 10
+  delay: 2
+  until:
+    - frontend_response.status == 200
+    - "'Todo Application' in frontend_response.content"
+
+- name: Verify proxied health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ web_server_port }}/health"
+    status_code: 200
+    return_content: true
+  register: proxied_health
+
+- name: Confirm proxied service health
+  ansible.builtin.assert:
+    that:
+      - proxied_health.json.status == "healthy"
+      - proxied_health.json.service == application_name
+    fail_msg: "Nginx could not reach the Flask health endpoint."
+    success_msg: "Nginx successfully proxied the Flask health endpoint."
+
+- name: Verify proxied task API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ web_server_port }}/api/tasks"
+    status_code: 200
+    return_content: true
+  register: proxied_task_response
+
+- name: Confirm proxied API returned seed rows
+  ansible.builtin.assert:
+    that:
+      - proxied_task_response.json is iterable
+      - proxied_task_response.json is not mapping
+      - proxied_task_response.json | length >= 2
+    fail_msg: "The proxied API did not return the expected task data."
+    success_msg: "The proxied API returned task data successfully."

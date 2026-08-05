@@ -1,0 +1,11 @@
+---
+- name: Deploy three-tier task management application
+  hosts: local
+  connection: local
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: database
+    - role: application
+    - role: webserver

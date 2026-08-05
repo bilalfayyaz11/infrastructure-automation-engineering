@@ -1,0 +1,11 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  listen: Restart task application
+
+- name: Restart task application
+  ansible.builtin.systemd_service:
+    name: todo-app
+    state: restarted
+  listen: Restart task application

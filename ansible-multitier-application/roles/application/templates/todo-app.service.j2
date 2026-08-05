@@ -1,0 +1,27 @@
+[Unit]
+Description=Gunicorn service for the task management API
+After=network.target mysql.service
+Requires=mysql.service
+
+[Service]
+Type=simple
+User={{ application_user }}
+Group={{ application_group }}
+WorkingDirectory={{ application_directory }}
+EnvironmentFile=/etc/todo-app/todo-app.env
+ExecStart={{ application_directory }}/venv/bin/gunicorn \
+  --workers 3 \
+  --bind 127.0.0.1:{{ application_port }} \
+  --access-logfile - \
+  --error-logfile - \
+  app:app
+Restart=always
+RestartSec=5
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ application_directory }}
+
+[Install]
+WantedBy=multi-user.target

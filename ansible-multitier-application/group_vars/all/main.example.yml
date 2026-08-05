@@ -1,0 +1,15 @@
+---
+database_name: todoapp
+database_user: todouser
+database_password: "replace-with-a-secure-password"
+database_host: 127.0.0.1
+database_port: 3306
+
+application_name: todo-app
+application_user: todoapp
+application_group: todoapp
+application_directory: /opt/todo-app
+application_port: 8080
+
+web_root: /var/www/todo-app
+web_server_port: 80

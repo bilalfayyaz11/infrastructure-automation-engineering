@@ -1,0 +1,121 @@
+---
+- name: Ensure application system group exists
+  ansible.builtin.group:
+    name: "{{ application_group }}"
+    system: true
+    state: present
+
+- name: Ensure application system user exists
+  ansible.builtin.user:
+    name: "{{ application_user }}"
+    group: "{{ application_group }}"
+    system: true
+    create_home: false
+    home: "{{ application_directory }}"
+    shell: /usr/sbin/nologin
+    state: present
+
+- name: Ensure application configuration directory exists
+  ansible.builtin.file:
+    path: /etc/todo-app
+    state: directory
+    owner: root
+    group: "{{ application_group }}"
+    mode: "0750"
+
+- name: Ensure application directory exists
+  ansible.builtin.file:
+    path: "{{ application_directory }}"
+    state: directory
+    owner: "{{ application_user }}"
+    group: "{{ application_group }}"
+    mode: "0750"
+
+- name: Create isolated application virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv "{{ application_directory }}/venv"
+    creates: "{{ application_directory }}/venv/bin/python"
+
+- name: Install application Python dependencies
+  ansible.builtin.pip:
+    name:
+      - flask
+      - flask-cors
+      - mysql-connector-python
+      - gunicorn
+    virtualenv: "{{ application_directory }}/venv"
+    virtualenv_command: python3 -m venv
+    state: present
+
+- name: Deploy Flask API
+  ansible.builtin.template:
+    src: app.py.j2
+    dest: "{{ application_directory }}/app.py"
+    owner: "{{ application_user }}"
+    group: "{{ application_group }}"
+    mode: "0640"
+  notify: Restart task application
+
+- name: Install application environment file
+  ansible.builtin.template:
+    src: todo-app.env.j2
+    dest: /etc/todo-app/todo-app.env
+    owner: root
+    group: "{{ application_group }}"
+    mode: "0640"
+  no_log: true
+  notify: Restart task application
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: todo-app.service.j2
+    dest: /etc/systemd/system/todo-app.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart task application
+
+- name: Apply pending application changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure task application is enabled and running
+  ansible.builtin.systemd_service:
+    name: todo-app
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for application port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ application_port }}"
+    delay: 2
+    timeout: 120
+
+- name: Verify application health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ application_port }}/health"
+    status_code: 200
+    return_content: true
+  register: application_health
+  retries: 15
+  delay: 2
+  until:
+    - application_health.status == 200
+    - application_health.json.status == "healthy"
+
+- name: Verify task API returns JSON
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ application_port }}/api/tasks"
+    status_code: 200
+    return_content: true
+  register: task_api_response
+
+- name: Confirm task API response is an array
+  ansible.builtin.assert:
+    that:
+      - task_api_response.json is iterable
+      - task_api_response.json is not mapping
+      - task_api_response.json | length >= 2
+    fail_msg: "The API did not return the expected seed rows."
+    success_msg: "The Flask API returned the expected seed data."

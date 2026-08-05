@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+    <title>Todo Application</title>
+
+    <style>
+        :root {
+            color-scheme: light;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: #f4f6f8;
+            color: #1f2937;
+        }
+
+        header {
+            background: #111827;
+            color: white;
+            padding: 1.5rem;
+            text-align: center;
+        }
+
+        main {
+            width: min(900px, 92%);
+            margin: 2rem auto;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+        }
+
+        form {
+            display: grid;
+            gap: 1rem;
+        }
+
+        input,
+        textarea,
+        select,
+        button {
+            width: 100%;
+            padding: 0.85rem;
+            border-radius: 8px;
+            border: 1px solid #d1d5db;
+            font: inherit;
+        }
+
+        button {
+            background: #2563eb;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        .task {
+            border-bottom: 1px solid #e5e7eb;
+            padding: 1rem 0;
+        }
+
+        .task:last-child {
+            border-bottom: none;
+        }
+
+        .status {
+            display: inline-block;
+            margin-top: 0.5rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 999px;
+            background: #e5e7eb;
+            font-size: 0.85rem;
+        }
+
+        .message {
+            margin-top: 1rem;
+            font-weight: 700;
+        }
+    </style>
+</head>
+
+<body>
+<header>
+    <h1>Todo Application</h1>
+    <p>Managed with Ansible, Flask, Gunicorn, MySQL, and Nginx</p>
+</header>
+
+<main>
+    <section class="panel">
+        <h2>Create Task</h2>
+
+        <form id="task-form">
+            <input
+                id="title"
+                name="title"
+                type="text"
+                placeholder="Task title"
+                required
+            >
+
+            <textarea
+                id="description"
+                name="description"
+                placeholder="Task description"
+                rows="4"
+            ></textarea>
+
+            <select id="status" name="status">
+                <option value="pending">Pending</option>
+                <option value="in_progress">In progress</option>
+                <option value="completed">Completed</option>
+            </select>
+
+            <button type="submit">Create Task</button>
+        </form>
+
+        <div id="message" class="message"></div>
+    </section>
+
+    <section class="panel">
+        <h2>Tasks</h2>
+        <div id="tasks">Loading...</div>
+    </section>
+</main>
+
+<script>
+    const taskContainer = document.getElementById("tasks");
+    const taskForm = document.getElementById("task-form");
+    const message = document.getElementById("message");
+
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
+
+    async function loadTasks() {
+        const response = await fetch("/api/tasks");
+
+        if (!response.ok) {
+            throw new Error(`Task retrieval failed: ${response.status}`);
+        }
+
+        const tasks = await response.json();
+
+        if (!Array.isArray(tasks) || tasks.length === 0) {
+            taskContainer.innerHTML = "<p>No tasks found.</p>";
+            return;
+        }
+
+        taskContainer.innerHTML = tasks.map((task) => `
+            <article class="task">
+                <h3>${escapeHtml(task.title)}</h3>
+                <p>${escapeHtml(task.description || "No description")}</p>
+                <span class="status">${escapeHtml(task.status)}</span>
+            </article>
+        `).join("");
+    }
+
+    taskForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        message.textContent = "Creating task...";
+
+        const payload = {
+            title: document.getElementById("title").value,
+            description: document.getElementById("description").value,
+            status: document.getElementById("status").value
+        };
+
+        try {
+            const response = await fetch("/api/tasks", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const body = await response.json();
+
+            if (!response.ok) {
+                throw new Error(body.error || "Unable to create task");
+            }
+
+            message.textContent = "Task created successfully.";
+            taskForm.reset();
+            await loadTasks();
+        } catch (error) {
+            message.textContent = error.message;
+        }
+    });
+
+    loadTasks().catch((error) => {
+        taskContainer.textContent = error.message;
+    });
+</script>
+</body>
+</html>

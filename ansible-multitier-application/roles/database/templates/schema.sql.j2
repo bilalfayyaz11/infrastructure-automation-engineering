@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS tasks (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    title VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    status ENUM('pending', 'in_progress', 'completed') NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO tasks (id, title, description, status)
+VALUES
+    (
+        1,
+        'Verify database tier',
+        'Confirm that Ansible created the MySQL schema.',
+        'completed'
+    ),
+    (
+        2,
+        'Deploy application tier',
+        'Configure the Flask API and Gunicorn service.',
+        'pending'
+    )
+ON DUPLICATE KEY UPDATE
+    title = VALUES(title),
+    description = VALUES(description),
+    status = VALUES(status);
