@@ -1,0 +1,284 @@
+---
+- name: Manage Complete Kubernetes Application Lifecycle
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-app
+    service_name: nginx-service
+    app_image: nginx:alpine
+    replica_count: 3
+    action: deploy
+    new_replica_count: 4
+    new_image: nginx:stable-alpine
+
+  pre_tasks:
+    - name: Validate requested lifecycle action
+      ansible.builtin.assert:
+        that:
+          - action in ['deploy', 'scale', 'update', 'delete']
+        fail_msg: >-
+          Invalid action '{{ action }}'.
+          Supported actions are deploy, scale, update, and delete.
+
+    - name: Validate replica count for scaling
+      ansible.builtin.assert:
+        that:
+          - new_replica_count | int >= 1
+          - new_replica_count | int <= 20
+        fail_msg: "new_replica_count must be between 1 and 20."
+      when: action == 'scale'
+
+  tasks:
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+        state: present
+      when: action in ['deploy', 'scale', 'update']
+
+    - name: Deploy application resources
+      when: action == 'deploy'
+      block:
+        - name: Ensure application deployment exists
+          kubernetes.core.k8s:
+            state: present
+            apply: true
+            definition:
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: "{{ app_name }}"
+                namespace: "{{ namespace_name }}"
+                labels:
+                  app.kubernetes.io/name: "{{ app_name }}"
+                  app.kubernetes.io/managed-by: ansible
+              spec:
+                replicas: "{{ replica_count | int }}"
+                revisionHistoryLimit: 3
+                strategy:
+                  type: RollingUpdate
+                  rollingUpdate:
+                    maxUnavailable: 1
+                    maxSurge: 1
+                selector:
+                  matchLabels:
+                    app.kubernetes.io/name: "{{ app_name }}"
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/name: "{{ app_name }}"
+                      app.kubernetes.io/managed-by: ansible
+                  spec:
+                    containers:
+                      - name: nginx
+                        image: "{{ app_image }}"
+                        imagePullPolicy: IfNotPresent
+                        ports:
+                          - name: http
+                            containerPort: 80
+                        resources:
+                          requests:
+                            cpu: 50m
+                            memory: 64Mi
+                          limits:
+                            cpu: 200m
+                            memory: 128Mi
+                        readinessProbe:
+                          httpGet:
+                            path: /
+                            port: http
+                          initialDelaySeconds: 3
+                          periodSeconds: 5
+                        livenessProbe:
+                          httpGet:
+                            path: /
+                            port: http
+                          initialDelaySeconds: 10
+                          periodSeconds: 10
+
+        - name: Ensure application service exists
+          kubernetes.core.k8s:
+            state: present
+            apply: true
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: "{{ service_name }}"
+                namespace: "{{ namespace_name }}"
+                labels:
+                  app.kubernetes.io/name: "{{ app_name }}"
+                  app.kubernetes.io/managed-by: ansible
+              spec:
+                type: ClusterIP
+                selector:
+                  app.kubernetes.io/name: "{{ app_name }}"
+                ports:
+                  - name: http
+                    protocol: TCP
+                    port: 80
+                    targetPort: 80
+
+    - name: Verify deployment exists before scale or update
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace_name }}"
+      register: existing_deployment
+      when: action in ['scale', 'update']
+
+    - name: Stop if deployment is unavailable
+      ansible.builtin.assert:
+        that:
+          - existing_deployment.resources | length == 1
+        fail_msg: >-
+          Deployment {{ app_name }} does not exist.
+          Run this playbook with action=deploy first.
+      when: action in ['scale', 'update']
+
+    - name: Scale application deployment
+      kubernetes.core.k8s:
+        state: present
+        merge_type:
+          - merge
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace_name }}"
+          spec:
+            replicas: "{{ new_replica_count | int }}"
+      when: action == 'scale'
+
+    - name: Update application container image
+      kubernetes.core.k8s:
+        state: present
+        merge_type:
+          - strategic-merge
+          - merge
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace_name }}"
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: nginx
+                    image: "{{ new_image }}"
+      when: action == 'update'
+
+    - name: Wait for deployment rollout
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace_name }}"
+      register: rollout_status
+      until:
+        - rollout_status.resources | length == 1
+        - >-
+          rollout_status.resources[0].status.observedGeneration
+          | default(0)
+          | int
+          >=
+          rollout_status.resources[0].metadata.generation
+          | int
+        - >-
+          rollout_status.resources[0].status.readyReplicas
+          | default(0)
+          | int
+          ==
+          rollout_status.resources[0].spec.replicas
+          | int
+        - >-
+          rollout_status.resources[0].status.updatedReplicas
+          | default(0)
+          | int
+          ==
+          rollout_status.resources[0].spec.replicas
+          | int
+      retries: 60
+      delay: 5
+      when: action in ['deploy', 'scale', 'update']
+
+    - name: Retrieve application service
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: "{{ service_name }}"
+        namespace: "{{ namespace_name }}"
+      register: service_status
+      when: action == 'deploy'
+
+    - name: Verify service exists after deployment
+      ansible.builtin.assert:
+        that:
+          - service_status.resources | length == 1
+        fail_msg: "Service {{ service_name }} was not created."
+      when: action == 'deploy'
+
+    - name: Delete application resources
+      when: action == 'delete'
+      block:
+        - name: Delete application deployment
+          kubernetes.core.k8s:
+            state: absent
+            api_version: apps/v1
+            kind: Deployment
+            name: "{{ app_name }}"
+            namespace: "{{ namespace_name }}"
+
+        - name: Delete application service
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Service
+            name: "{{ service_name }}"
+            namespace: "{{ namespace_name }}"
+
+        - name: Wait until deployment is absent
+          kubernetes.core.k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            name: "{{ app_name }}"
+            namespace: "{{ namespace_name }}"
+          register: deleted_deployment
+          until: deleted_deployment.resources | length == 0
+          retries: 30
+          delay: 2
+
+        - name: Wait until service is absent
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "{{ service_name }}"
+            namespace: "{{ namespace_name }}"
+          register: deleted_service
+          until: deleted_service.resources | length == 0
+          retries: 30
+          delay: 2
+
+    - name: Display active application status
+      ansible.builtin.debug:
+        msg:
+          - "Action: {{ action }}"
+          - "Deployment: {{ rollout_status.resources[0].metadata.name }}"
+          - "Image: {{ rollout_status.resources[0].spec.template.spec.containers[0].image }}"
+          - "Desired replicas: {{ rollout_status.resources[0].spec.replicas }}"
+          - "Ready replicas: {{ rollout_status.resources[0].status.readyReplicas | default(0) }}"
+      when: action in ['deploy', 'scale', 'update']
+
+    - name: Display deletion status
+      ansible.builtin.debug:
+        msg: >-
+          Deployment {{ app_name }} and service {{ service_name }}
+          were successfully deleted.
+      when: action == 'delete'

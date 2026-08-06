@@ -1,0 +1,5 @@
+[local]
+localhost ansible_connection=local ansible_python_interpreter=/home/ubuntu/.venvs/ansible-kubernetes/bin/python
+
+[k8s_cluster]
+localhost ansible_connection=local ansible_python_interpreter=/home/ubuntu/.venvs/ansible-kubernetes/bin/python

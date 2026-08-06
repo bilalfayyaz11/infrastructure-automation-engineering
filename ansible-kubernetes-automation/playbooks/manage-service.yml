@@ -1,0 +1,111 @@
+---
+- name: Manage Kubernetes Application Service
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-app
+    service_name: nginx-service
+    service_port: 80
+    target_port: 80
+    service_type: ClusterIP
+
+  tasks:
+    - name: Verify application deployment exists
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace_name }}"
+      register: deployment_info
+
+    - name: Stop if deployment is unavailable
+      ansible.builtin.assert:
+        that:
+          - deployment_info.resources | length == 1
+          - deployment_info.resources[0].status.readyReplicas | default(0) | int > 0
+        fail_msg: >-
+          Deployment {{ app_name }} is unavailable or has no ready replicas.
+          Run manage-deployment.yml first.
+
+    - name: Ensure application service exists
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ service_name }}"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app.kubernetes.io/name: "{{ app_name }}"
+              app.kubernetes.io/managed-by: ansible
+          spec:
+            type: "{{ service_type }}"
+            selector:
+              app.kubernetes.io/name: "{{ app_name }}"
+            ports:
+              - name: http
+                protocol: TCP
+                port: "{{ service_port | int }}"
+                targetPort: "{{ target_port | int }}"
+      register: service_result
+
+    - name: Report service change
+      ansible.builtin.debug:
+        msg: >-
+          Service {{ service_name }}
+          {{ 'was created or updated' if service_result.changed else 'already matches the desired state' }}.
+
+    - name: Retrieve service information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: "{{ service_name }}"
+        namespace: "{{ namespace_name }}"
+      register: service_info
+
+    - name: Verify service configuration
+      ansible.builtin.assert:
+        that:
+          - service_info.resources | length == 1
+          - service_info.resources[0].spec.type == service_type
+          - service_info.resources[0].spec.ports[0].port | int == service_port | int
+          - service_info.resources[0].spec.ports[0].targetPort | int == target_port | int
+          - service_info.resources[0].spec.selector['app.kubernetes.io/name'] == app_name
+        fail_msg: "Service {{ service_name }} configuration validation failed."
+        success_msg: "Service {{ service_name }} configuration is valid."
+
+    - name: Retrieve service endpoints
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Endpoints
+        name: "{{ service_name }}"
+        namespace: "{{ namespace_name }}"
+      register: endpoint_info
+
+    - name: Verify service has backend endpoints
+      ansible.builtin.assert:
+        that:
+          - endpoint_info.resources | length == 1
+          - endpoint_info.resources[0].subsets | default([]) | length > 0
+          - endpoint_info.resources[0].subsets[0].addresses | default([]) | length > 0
+        fail_msg: >-
+          Service {{ service_name }} exists but has no ready backend endpoints.
+          Check the service selector and pod readiness.
+        success_msg: >-
+          Service {{ service_name }} routes to
+          {{ endpoint_info.resources[0].subsets[0].addresses | length }}
+          ready backend endpoints.
+
+    - name: Display service details
+      ansible.builtin.debug:
+        msg:
+          - "Service: {{ service_info.resources[0].metadata.name }}"
+          - "Type: {{ service_info.resources[0].spec.type }}"
+          - "Cluster IP: {{ service_info.resources[0].spec.clusterIP }}"
+          - "Port: {{ service_info.resources[0].spec.ports[0].port }}"
+          - "Target port: {{ service_info.resources[0].spec.ports[0].targetPort }}"
+          - "Ready endpoints: {{ endpoint_info.resources[0].subsets[0].addresses | length }}"

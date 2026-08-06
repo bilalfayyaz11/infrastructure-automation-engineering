@@ -1,0 +1,109 @@
+---
+- name: Scale Down Kubernetes Application Deployment
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-app
+    new_replica_count: 2
+
+  tasks:
+    - name: Retrieve current deployment
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace_name }}"
+      register: current_deployment
+
+    - name: Verify deployment exists
+      ansible.builtin.assert:
+        that:
+          - current_deployment.resources | length == 1
+        fail_msg: >-
+          Deployment {{ app_name }} does not exist in namespace
+          {{ namespace_name }}.
+
+    - name: Display current replica count
+      ansible.builtin.debug:
+        msg: >-
+          Scaling {{ app_name }} from
+          {{ current_deployment.resources[0].spec.replicas }}
+          to {{ new_replica_count }} replicas.
+
+    - name: Scale deployment down
+      kubernetes.core.k8s:
+        state: present
+        merge_type:
+          - merge
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace_name }}"
+          spec:
+            replicas: "{{ new_replica_count | int }}"
+      register: scale_down_result
+
+    - name: Report scale-down change
+      ansible.builtin.debug:
+        msg: >-
+          Deployment {{ app_name }}
+          {{ 'was scaled down' if scale_down_result.changed else 'already has the requested replica count' }}.
+
+    - name: Wait for exact replica state
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace_name }}"
+      register: scaled_down_deployment
+      until:
+        - scaled_down_deployment.resources | length == 1
+        - scaled_down_deployment.resources[0].spec.replicas | int == new_replica_count | int
+        - scaled_down_deployment.resources[0].status.readyReplicas | default(0) | int == new_replica_count | int
+        - scaled_down_deployment.resources[0].status.availableReplicas | default(0) | int == new_replica_count | int
+        - scaled_down_deployment.resources[0].status.updatedReplicas | default(0) | int == new_replica_count | int
+      retries: 60
+      delay: 5
+
+    - name: Retrieve remaining application pods
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ namespace_name }}"
+        label_selectors:
+          - "app.kubernetes.io/name={{ app_name }}"
+      register: remaining_pods
+      until:
+        - remaining_pods.resources | length == new_replica_count | int
+        - >-
+          remaining_pods.resources
+          | selectattr('status.phase', 'equalto', 'Running')
+          | list
+          | length == new_replica_count | int
+      retries: 30
+      delay: 3
+
+    - name: Verify final scale-down state
+      ansible.builtin.assert:
+        that:
+          - remaining_pods.resources | length == new_replica_count | int
+        fail_msg: >-
+          Expected {{ new_replica_count }} pods after scale-down but observed
+          {{ remaining_pods.resources | length }}.
+        success_msg: >-
+          Deployment {{ app_name }} successfully scaled down to
+          {{ new_replica_count }} running replicas.
+
+    - name: Display remaining pods
+      ansible.builtin.debug:
+        msg:
+          - "Pod: {{ item.metadata.name }}"
+          - "Phase: {{ item.status.phase }}"
+          - "Pod IP: {{ item.status.podIP | default('Pending') }}"
+      loop: "{{ remaining_pods.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"

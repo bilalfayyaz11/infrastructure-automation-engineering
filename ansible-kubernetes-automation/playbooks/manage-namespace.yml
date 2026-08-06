@@ -1,0 +1,45 @@
+---
+- name: Manage Kubernetes Namespace
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+
+  tasks:
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+        state: present
+      register: namespace_result
+
+    - name: Report namespace change
+      ansible.builtin.debug:
+        msg: >-
+          Namespace {{ namespace_name }}
+          {{ 'was created' if namespace_result.changed else 'already exists' }}.
+
+    - name: Retrieve namespace information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+      register: namespace_info
+
+    - name: Verify namespace was returned
+      ansible.builtin.assert:
+        that:
+          - namespace_info.resources | length == 1
+          - namespace_info.resources[0].metadata.name == namespace_name
+          - namespace_info.resources[0].status.phase == "Active"
+        fail_msg: "Namespace {{ namespace_name }} was not created successfully."
+        success_msg: "Namespace {{ namespace_name }} is active and verified."
+
+    - name: Display namespace details
+      ansible.builtin.debug:
+        msg:
+          - "Name: {{ namespace_info.resources[0].metadata.name }}"
+          - "Phase: {{ namespace_info.resources[0].status.phase }}"
+          - "UID: {{ namespace_info.resources[0].metadata.uid }}"

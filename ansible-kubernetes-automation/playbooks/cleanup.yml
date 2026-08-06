@@ -1,0 +1,54 @@
+---
+- name: Clean Up Kubernetes Application Resources
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+
+  tasks:
+    - name: Check whether namespace exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+      register: namespace_check
+
+    - name: Display cleanup status when namespace is absent
+      ansible.builtin.debug:
+        msg: >-
+          Namespace {{ namespace_name }} is already absent.
+          No cleanup was required.
+      when: namespace_check.resources | length == 0
+
+    - name: Delete namespace and all contained resources
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+        state: absent
+        wait: true
+        wait_timeout: 300
+      register: namespace_deletion
+      when: namespace_check.resources | length == 1
+
+    - name: Wait until namespace is fully removed
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+      register: cleanup_check
+      until: cleanup_check.resources | length == 0
+      retries: 60
+      delay: 5
+      when: namespace_check.resources | length == 1
+
+    - name: Confirm cleanup completion
+      ansible.builtin.assert:
+        that:
+          - cleanup_check.resources | default([]) | length == 0
+        fail_msg: "Namespace {{ namespace_name }} still exists."
+        success_msg: >-
+          Namespace {{ namespace_name }} and all contained resources
+          were successfully removed.
+      when: namespace_check.resources | length == 1

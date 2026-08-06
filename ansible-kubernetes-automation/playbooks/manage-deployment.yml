@@ -1,0 +1,151 @@
+---
+- name: Manage Kubernetes Application Deployment
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-app
+    app_image: nginx:alpine
+    replica_count: 3
+    app_port: 80
+
+  tasks:
+    - name: Verify target namespace exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+      register: namespace_info
+
+    - name: Stop if namespace is unavailable
+      ansible.builtin.assert:
+        that:
+          - namespace_info.resources | length == 1
+          - namespace_info.resources[0].status.phase == "Active"
+        fail_msg: >-
+          Namespace {{ namespace_name }} is unavailable.
+          Run manage-namespace.yml before this playbook.
+
+    - name: Ensure application deployment exists
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ namespace_name }}"
+            labels:
+              app.kubernetes.io/name: "{{ app_name }}"
+              app.kubernetes.io/managed-by: ansible
+          spec:
+            replicas: "{{ replica_count | int }}"
+            revisionHistoryLimit: 3
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 1
+                maxSurge: 1
+            selector:
+              matchLabels:
+                app.kubernetes.io/name: "{{ app_name }}"
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: "{{ app_name }}"
+                  app.kubernetes.io/managed-by: ansible
+              spec:
+                containers:
+                  - name: nginx
+                    image: "{{ app_image }}"
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                      - name: http
+                        containerPort: "{{ app_port | int }}"
+                        protocol: TCP
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        cpu: 200m
+                        memory: 128Mi
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      initialDelaySeconds: 3
+                      periodSeconds: 5
+                      timeoutSeconds: 2
+                      failureThreshold: 6
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: http
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+                      timeoutSeconds: 2
+                      failureThreshold: 3
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop:
+                          - ALL
+                        add:
+                          - CHOWN
+                          - DAC_OVERRIDE
+                          - SETGID
+                          - SETUID
+      register: deployment_result
+
+    - name: Report deployment change
+      ansible.builtin.debug:
+        msg: >-
+          Deployment {{ app_name }}
+          {{ 'was created or updated' if deployment_result.changed else 'already matches the desired state' }}.
+
+    - name: Wait for deployment availability
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ app_name }}"
+        namespace: "{{ namespace_name }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 300
+      register: deployment_status
+
+    - name: Verify desired replicas are ready
+      ansible.builtin.assert:
+        that:
+          - deployment_status.resources | length == 1
+          - deployment_status.resources[0].status.readyReplicas | default(0) | int == replica_count | int
+          - deployment_status.resources[0].status.availableReplicas | default(0) | int == replica_count | int
+        fail_msg: >-
+          Deployment rollout completed without reaching
+          {{ replica_count }} ready replicas.
+        success_msg: >-
+          Deployment {{ app_name }} has
+          {{ replica_count }} ready and available replicas.
+
+    - name: Retrieve application pods
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ namespace_name }}"
+        label_selectors:
+          - "app.kubernetes.io/name={{ app_name }}"
+      register: application_pods
+
+    - name: Display deployment and pod status
+      ansible.builtin.debug:
+        msg:
+          - "Deployment: {{ deployment_status.resources[0].metadata.name }}"
+          - "Desired replicas: {{ deployment_status.resources[0].spec.replicas }}"
+          - "Ready replicas: {{ deployment_status.resources[0].status.readyReplicas | default(0) }}"
+          - "Available replicas: {{ deployment_status.resources[0].status.availableReplicas | default(0) }}"
+          - "Observed pods: {{ application_pods.resources | length }}"

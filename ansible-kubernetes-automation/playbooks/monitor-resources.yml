@@ -1,0 +1,193 @@
+---
+- name: Monitor Kubernetes Application Resources
+  hosts: local
+  gather_facts: false
+
+  vars:
+    namespace_name: ansible-demo
+    app_name: nginx-app
+    service_name: nginx-service
+
+  tasks:
+    - name: Verify namespace exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ namespace_name }}"
+      register: namespace_info
+
+    - name: Stop if namespace is unavailable
+      ansible.builtin.assert:
+        that:
+          - namespace_info.resources | length == 1
+          - namespace_info.resources[0].status.phase == "Active"
+        fail_msg: "Namespace {{ namespace_name }} is unavailable."
+
+    - name: Retrieve deployments
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ namespace_name }}"
+      register: deployments
+
+    - name: Verify application deployment exists
+      ansible.builtin.assert:
+        that:
+          - deployments.resources
+            | selectattr('metadata.name', 'equalto', app_name)
+            | list
+            | length == 1
+        fail_msg: "Deployment {{ app_name }} was not found."
+
+    - name: Display deployment information
+      ansible.builtin.debug:
+        msg:
+          - "Deployment: {{ item.metadata.name }}"
+          - "Image: {{ item.spec.template.spec.containers[0].image }}"
+          - "Desired replicas: {{ item.spec.replicas }}"
+          - "Ready replicas: {{ item.status.readyReplicas | default(0) }}"
+          - "Available replicas: {{ item.status.availableReplicas | default(0) }}"
+          - "Updated replicas: {{ item.status.updatedReplicas | default(0) }}"
+      loop: "{{ deployments.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Retrieve services
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: "{{ namespace_name }}"
+      register: services
+
+    - name: Verify application service exists
+      ansible.builtin.assert:
+        that:
+          - services.resources
+            | selectattr('metadata.name', 'equalto', service_name)
+            | list
+            | length == 1
+        fail_msg: "Service {{ service_name }} was not found."
+
+    - name: Display service information
+      ansible.builtin.debug:
+        msg:
+          - "Service: {{ item.metadata.name }}"
+          - "Type: {{ item.spec.type }}"
+          - "Cluster IP: {{ item.spec.clusterIP | default('None') }}"
+          - "Ports: {{ item.spec.ports | default([]) }}"
+      loop: "{{ services.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Retrieve application endpoints
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Endpoints
+        name: "{{ service_name }}"
+        namespace: "{{ namespace_name }}"
+      register: endpoint_info
+
+    - name: Verify service endpoints exist
+      ansible.builtin.assert:
+        that:
+          - endpoint_info.resources | length == 1
+          - endpoint_info.resources[0].subsets | default([]) | length > 0
+          - endpoint_info.resources[0].subsets[0].addresses | default([]) | length > 0
+        fail_msg: "Service {{ service_name }} has no ready endpoints."
+        success_msg: >-
+          Service {{ service_name }} has
+          {{ endpoint_info.resources[0].subsets[0].addresses | length }}
+          ready endpoints.
+
+    - name: Retrieve application pods
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ namespace_name }}"
+        label_selectors:
+          - "app.kubernetes.io/name={{ app_name }}"
+      register: pods
+
+    - name: Verify application pods are running
+      ansible.builtin.assert:
+        that:
+          - pods.resources | length > 0
+          - >-
+            pods.resources
+            | rejectattr('status.phase', 'equalto', 'Running')
+            | list
+            | length == 0
+        fail_msg: "One or more application pods are not running."
+        success_msg: "All {{ pods.resources | length }} application pods are running."
+
+    - name: Display pod information
+      ansible.builtin.debug:
+        msg:
+          - "Pod: {{ item.metadata.name }}"
+          - "Phase: {{ item.status.phase | default('Unknown') }}"
+          - "Ready: {{
+              item.status.conditions
+              | default([])
+              | selectattr('type', 'equalto', 'Ready')
+              | map(attribute='status')
+              | first
+              | default('Unknown')
+            }}"
+          - "Pod IP: {{ item.status.podIP | default('Pending') }}"
+          - "Node: {{ item.spec.nodeName | default('Unscheduled') }}"
+          - "Restarts: {{
+              item.status.containerStatuses
+              | default([])
+              | map(attribute='restartCount')
+              | sum
+            }}"
+      loop: "{{ pods.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Retrieve cluster nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: nodes
+
+    - name: Verify at least one node is ready
+      ansible.builtin.assert:
+        that:
+          - nodes.resources | length > 0
+          - >-
+            nodes.resources
+            | selectattr('status.conditions', 'defined')
+            | list
+            | length > 0
+        fail_msg: "No Kubernetes nodes with status information were found."
+
+    - name: Display node information
+      ansible.builtin.debug:
+        msg:
+          - "Node: {{ item.metadata.name }}"
+          - "Ready: {{
+              item.status.conditions
+              | default([])
+              | selectattr('type', 'equalto', 'Ready')
+              | map(attribute='status')
+              | first
+              | default('Unknown')
+            }}"
+          - "Kubelet: {{ item.status.nodeInfo.kubeletVersion | default('Unknown') }}"
+          - "Container runtime: {{ item.status.nodeInfo.containerRuntimeVersion | default('Unknown') }}"
+          - "CPU capacity: {{ item.status.capacity.cpu | default('Unknown') }}"
+          - "Memory capacity: {{ item.status.capacity.memory | default('Unknown') }}"
+      loop: "{{ nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Display monitoring summary
+      ansible.builtin.debug:
+        msg:
+          - "Namespace: {{ namespace_name }}"
+          - "Deployments: {{ deployments.resources | length }}"
+          - "Services: {{ services.resources | length }}"
+          - "Application pods: {{ pods.resources | length }}"
+          - "Cluster nodes: {{ nodes.resources | length }}"
+          - "Application health: HEALTHY"
