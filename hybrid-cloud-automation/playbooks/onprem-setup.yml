@@ -1,0 +1,176 @@
+---
+- name: Configure On-Premises Container Environment
+  hosts: onpremises
+  gather_facts: false
+  become: true
+
+  vars:
+    postgres_container: onprem-database
+    redis_container: onprem-cache
+    postgres_image: postgres:17-alpine
+    redis_image: redis:7-alpine
+
+  tasks:
+    - name: Verify Docker engine is available
+      community.docker.docker_host_info:
+      register: docker_host
+
+    - name: Confirm Docker engine access
+      ansible.builtin.assert:
+        that:
+          - docker_host.host_info is defined
+        fail_msg: "Docker Engine is unavailable to Ansible."
+        success_msg: "Docker Engine access is ready."
+
+    - name: Create on-premises Docker network
+      community.docker.docker_network:
+        name: "{{ docker_network }}"
+        driver: bridge
+        state: present
+
+    - name: Create on-premises storage directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ storage_root }}"
+          owner: root
+          group: root
+          mode: "0755"
+        - path: "{{ storage_root }}/postgres"
+          owner: "999"
+          group: "999"
+          mode: "0700"
+        - path: "{{ storage_root }}/redis"
+          owner: "999"
+          group: "999"
+          mode: "0750"
+
+    - name: Deploy PostgreSQL database
+      community.docker.docker_container:
+        name: "{{ postgres_container }}"
+        image: "{{ postgres_image }}"
+        state: started
+        restart_policy: unless-stopped
+        pull: true
+        recreate: false
+        published_ports:
+          - "5432:5432"
+        env:
+          POSTGRES_DB: onprem_db
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: secure123
+        networks:
+          - name: "{{ docker_network }}"
+        volumes:
+          - "{{ storage_root }}/postgres:/var/lib/postgresql/data"
+        healthcheck:
+          test:
+            - CMD-SHELL
+            - "pg_isready -U admin -d onprem_db"
+          interval: 10s
+          timeout: 5s
+          retries: 10
+          start_period: 10s
+        labels:
+          environment: onpremises
+          datacenter: "{{ datacenter }}"
+          service: database
+
+    - name: Deploy Redis cache
+      community.docker.docker_container:
+        name: "{{ redis_container }}"
+        image: "{{ redis_image }}"
+        state: started
+        restart_policy: unless-stopped
+        pull: true
+        recreate: false
+        published_ports:
+          - "6379:6379"
+        command:
+          - redis-server
+          - --appendonly
+          - "yes"
+        networks:
+          - name: "{{ docker_network }}"
+        volumes:
+          - "{{ storage_root }}/redis:/data"
+        healthcheck:
+          test:
+            - CMD
+            - redis-cli
+            - ping
+          interval: 10s
+          timeout: 5s
+          retries: 10
+          start_period: 5s
+        labels:
+          environment: onpremises
+          datacenter: "{{ datacenter }}"
+          service: cache
+
+    - name: Wait for PostgreSQL host port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 5432
+        delay: 2
+        timeout: 120
+
+    - name: Wait for Redis host port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6379
+        delay: 2
+        timeout: 120
+
+    - name: Retrieve PostgreSQL container information
+      community.docker.docker_container_info:
+        name: "{{ postgres_container }}"
+      register: postgres_info
+
+    - name: Retrieve Redis container information
+      community.docker.docker_container_info:
+        name: "{{ redis_container }}"
+      register: redis_info
+
+    - name: Verify on-premises containers are running
+      ansible.builtin.assert:
+        that:
+          - postgres_info.exists
+          - redis_info.exists
+          - postgres_info.container.State.Running
+          - redis_info.container.State.Running
+        fail_msg: "One or more on-premises containers failed to start."
+        success_msg: "PostgreSQL and Redis containers are running."
+
+    - name: Wait for PostgreSQL health status
+      community.docker.docker_container_info:
+        name: "{{ postgres_container }}"
+      register: postgres_health
+      until:
+        - postgres_health.container.State.Health is defined
+        - postgres_health.container.State.Health.Status == "healthy"
+      retries: 30
+      delay: 5
+
+    - name: Wait for Redis health status
+      community.docker.docker_container_info:
+        name: "{{ redis_container }}"
+      register: redis_health
+      until:
+        - redis_health.container.State.Health is defined
+        - redis_health.container.State.Health.Status == "healthy"
+      retries: 30
+      delay: 5
+
+    - name: Display on-premises environment summary
+      ansible.builtin.debug:
+        msg:
+          - "Environment: {{ environment_type }}"
+          - "Datacenter: {{ datacenter }}"
+          - "Network: {{ docker_network }}"
+          - "PostgreSQL: {{ postgres_health.container.State.Health.Status }}"
+          - "Redis: {{ redis_health.container.State.Health.Status }}"

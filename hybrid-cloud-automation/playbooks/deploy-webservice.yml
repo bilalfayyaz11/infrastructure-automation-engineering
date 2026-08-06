@@ -1,0 +1,151 @@
+---
+- name: Deploy Hybrid Web Service
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    web_service_image: hybrid-web-service:1.0.0
+
+    service_configs:
+      onpremises:
+        containers:
+          - name: webservice-onprem-1
+            host_port: 5000
+        environment:
+          ENVIRONMENT: on-premises
+          DATACENTER: "{{ datacenter }}"
+          PORT: "5000"
+          SERVICE_VERSION: "1.0.0"
+          DATABASE_URL: postgresql://admin:secure123@onprem-database:5432/onprem_db
+          CACHE_URL: redis://onprem-cache:6379
+
+      cloud:
+        containers:
+          - name: webservice-cloud-1
+            host_port: 5001
+          - name: webservice-cloud-2
+            host_port: 5002
+        environment:
+          ENVIRONMENT: cloud
+          DATACENTER: "{{ datacenter }}"
+          PORT: "5000"
+          SERVICE_VERSION: "1.0.0"
+          DATABASE_URL: mysql://clouduser:cloudpass123@cloud-database:3306/cloud_db
+          CACHE_URL: not-configured
+
+  tasks:
+    - name: Verify web service image exists locally
+      community.docker.docker_image_info:
+        name: "{{ web_service_image }}"
+      register: image_info
+
+    - name: Confirm web service image is available
+      ansible.builtin.assert:
+        that:
+          - image_info.images | length == 1
+        fail_msg: >-
+          Image {{ web_service_image }} is unavailable.
+          Build the web service image before deployment.
+
+    - name: Verify target Docker network exists
+      community.docker.docker_network_info:
+        name: "{{ docker_network }}"
+      register: network_info
+
+    - name: Confirm target network is available
+      ansible.builtin.assert:
+        that:
+          - network_info.exists
+        fail_msg: "Docker network {{ docker_network }} does not exist."
+
+    - name: Deploy environment-specific web service instances
+      community.docker.docker_container:
+        name: "{{ item.name }}"
+        image: "{{ web_service_image }}"
+        state: started
+        restart_policy: unless-stopped
+        recreate: false
+        published_ports:
+          - "127.0.0.1:{{ item.host_port }}:5000"
+        env: "{{ service_configs[environment_type].environment }}"
+        networks:
+          - name: "{{ docker_network }}"
+        healthcheck:
+          test:
+            - CMD
+            - python
+            - -c
+            - >-
+              import urllib.request;
+              urllib.request.urlopen(
+              'http://127.0.0.1:5000/health',
+              timeout=3)
+          interval: 10s
+          timeout: 5s
+          retries: 10
+          start_period: 10s
+        labels:
+          environment: "{{ environment_type }}"
+          datacenter: "{{ datacenter }}"
+          service: hybrid-web-service
+          version: "1.0.0"
+          instance: "{{ item.name }}"
+      loop: "{{ service_configs[environment_type].containers }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Wait for web service host ports
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item.host_port }}"
+        delay: 2
+        timeout: 120
+      loop: "{{ service_configs[environment_type].containers }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Wait for each container to become healthy
+      community.docker.docker_container_info:
+        name: "{{ item.name }}"
+      register: container_health
+      until:
+        - container_health.exists
+        - container_health.container.State.Health is defined
+        - container_health.container.State.Health.Status == "healthy"
+      retries: 30
+      delay: 4
+      loop: "{{ service_configs[environment_type].containers }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Validate root endpoint for each instance
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item.host_port }}/"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: root_responses
+      loop: "{{ service_configs[environment_type].containers }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Validate health endpoint for each instance
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item.host_port }}/health"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: health_responses
+      loop: "{{ service_configs[environment_type].containers }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "Environment: {{ environment_type }}"
+          - "Datacenter: {{ datacenter }}"
+          - "Network: {{ docker_network }}"
+          - "Instances: {{ service_configs[environment_type].containers | map(attribute='name') | list }}"
+          - "Host ports: {{ service_configs[environment_type].containers | map(attribute='host_port') | list }}"

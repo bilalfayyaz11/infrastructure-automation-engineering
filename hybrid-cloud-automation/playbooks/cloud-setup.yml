@@ -1,0 +1,291 @@
+---
+- name: Configure Cloud Container Environment
+  hosts: cloud
+  gather_facts: false
+  become: true
+
+  vars:
+    mysql_container: cloud-database
+    prometheus_container: cloud-monitoring
+    load_balancer_container: cloud-loadbalancer
+
+    mysql_image: mysql:8.4
+    prometheus_image: prom/prometheus:v3.5.0
+    nginx_image: nginx:1.29-alpine
+
+  tasks:
+    - name: Verify Docker engine is available
+      community.docker.docker_host_info:
+      register: docker_host
+
+    - name: Confirm Docker engine access
+      ansible.builtin.assert:
+        that:
+          - docker_host.host_info is defined
+        fail_msg: "Docker Engine is unavailable to Ansible."
+        success_msg: "Docker Engine access is ready."
+
+    - name: Create cloud Docker network
+      community.docker.docker_network:
+        name: "{{ docker_network }}"
+        driver: bridge
+        state: present
+
+    - name: Create cloud storage directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ storage_root }}"
+          owner: root
+          group: root
+          mode: "0755"
+
+        - path: "{{ storage_root }}/mysql"
+          owner: "999"
+          group: "999"
+          mode: "0750"
+
+        - path: "{{ storage_root }}/prometheus"
+          owner: "65534"
+          group: "65534"
+          mode: "0750"
+
+        - path: "{{ storage_root }}/config"
+          owner: root
+          group: root
+          mode: "0755"
+
+    - name: Create Prometheus configuration
+      ansible.builtin.copy:
+        dest: "{{ storage_root }}/config/prometheus.yml"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          global:
+            scrape_interval: 15s
+            evaluation_interval: 15s
+
+          scrape_configs:
+            - job_name: prometheus
+              static_configs:
+                - targets:
+                    - localhost:9090
+      register: prometheus_config
+
+    - name: Create NGINX load-balancer configuration
+      ansible.builtin.copy:
+        dest: "{{ storage_root }}/config/default.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          upstream hybrid_webservices {
+              server webservice-onprem-1:5000;
+              server webservice-cloud-1:5000;
+              server webservice-cloud-2:5000;
+          }
+
+          server {
+              listen 80;
+              server_name _;
+
+              location / {
+                  proxy_pass http://hybrid_webservices;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_connect_timeout 5s;
+                  proxy_read_timeout 30s;
+              }
+
+              location = /load-balancer-health {
+                  access_log off;
+                  return 200 "healthy\n";
+                  add_header Content-Type text/plain;
+              }
+          }
+      register: nginx_config
+
+    - name: Deploy cloud MySQL database
+      community.docker.docker_container:
+        name: "{{ mysql_container }}"
+        image: "{{ mysql_image }}"
+        state: started
+        restart_policy: unless-stopped
+        pull: true
+        recreate: false
+        published_ports:
+          - "3306:3306"
+        env:
+          MYSQL_ROOT_PASSWORD: cloudroot123
+          MYSQL_DATABASE: cloud_db
+          MYSQL_USER: clouduser
+          MYSQL_PASSWORD: cloudpass123
+        networks:
+          - name: "{{ docker_network }}"
+        volumes:
+          - "{{ storage_root }}/mysql:/var/lib/mysql"
+        healthcheck:
+          test:
+            - CMD-SHELL
+            - >-
+              mysqladmin ping
+              --host=127.0.0.1
+              --user=clouduser
+              --password=cloudpass123
+              --silent
+          interval: 10s
+          timeout: 5s
+          retries: 20
+          start_period: 30s
+        labels:
+          environment: cloud
+          datacenter: "{{ datacenter }}"
+          service: database
+
+    - name: Deploy Prometheus monitoring service
+      community.docker.docker_container:
+        name: "{{ prometheus_container }}"
+        image: "{{ prometheus_image }}"
+        state: started
+        restart_policy: unless-stopped
+        pull: true
+        recreate: "{{ prometheus_config.changed }}"
+        published_ports:
+          - "9090:9090"
+        networks:
+          - name: "{{ docker_network }}"
+        volumes:
+          - "{{ storage_root }}/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+          - "{{ storage_root }}/prometheus:/prometheus"
+        command:
+          - "--config.file=/etc/prometheus/prometheus.yml"
+          - "--storage.tsdb.path=/prometheus"
+          - "--web.enable-lifecycle"
+        healthcheck:
+          test:
+            - CMD
+            - wget
+            - --quiet
+            - --tries=1
+            - --spider
+            - http://localhost:9090/-/healthy
+          interval: 10s
+          timeout: 5s
+          retries: 15
+          start_period: 10s
+        labels:
+          environment: cloud
+          datacenter: "{{ datacenter }}"
+          service: monitoring
+
+    - name: Deploy NGINX load balancer
+      community.docker.docker_container:
+        name: "{{ load_balancer_container }}"
+        image: "{{ nginx_image }}"
+        state: started
+        restart_policy: unless-stopped
+        pull: true
+        recreate: "{{ nginx_config.changed }}"
+        published_ports:
+          - "8080:80"
+        networks:
+          - name: "{{ docker_network }}"
+          - name: onprem-network
+        networks_cli_compatible: true
+        comparisons:
+          networks: strict
+        volumes:
+          - "{{ storage_root }}/config/default.conf:/etc/nginx/conf.d/default.conf:ro"
+        etc_hosts:
+          host.docker.internal: host-gateway
+        healthcheck:
+          test:
+            - CMD-SHELL
+            - "wget --quiet --tries=1 --spider http://127.0.0.1/load-balancer-health"
+          interval: 10s
+          timeout: 5s
+          retries: 15
+          start_period: 5s
+        labels:
+          environment: cloud
+          datacenter: "{{ datacenter }}"
+          service: load-balancer
+
+    - name: Wait for cloud service ports
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        delay: 2
+        timeout: 180
+      loop:
+        - 3306
+        - 9090
+        - 8080
+
+    - name: Wait for MySQL health status
+      community.docker.docker_container_info:
+        name: "{{ mysql_container }}"
+      register: mysql_health
+      until:
+        - mysql_health.exists
+        - mysql_health.container.State.Health is defined
+        - mysql_health.container.State.Health.Status == "healthy"
+      retries: 40
+      delay: 5
+
+    - name: Wait for Prometheus health status
+      community.docker.docker_container_info:
+        name: "{{ prometheus_container }}"
+      register: prometheus_health
+      until:
+        - prometheus_health.exists
+        - prometheus_health.container.State.Health is defined
+        - prometheus_health.container.State.Health.Status == "healthy"
+      retries: 30
+      delay: 5
+
+    - name: Wait for NGINX health status
+      community.docker.docker_container_info:
+        name: "{{ load_balancer_container }}"
+      register: nginx_health
+      until:
+        - nginx_health.exists
+        - nginx_health.container.State.Health is defined
+        - nginx_health.container.State.Health.Status == "healthy"
+      retries: 30
+      delay: 5
+
+    - name: Validate Prometheus HTTP health endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9090/-/healthy
+        method: GET
+        status_code: 200
+        return_content: true
+      register: prometheus_http
+
+    - name: Validate NGINX configuration inside container
+      community.docker.docker_container_exec:
+        container: "{{ load_balancer_container }}"
+        command: nginx -t
+      register: nginx_validation
+      changed_when: false
+
+    - name: Display cloud environment summary
+      ansible.builtin.debug:
+        msg:
+          - "Environment: {{ environment_type }}"
+          - "Datacenter: {{ datacenter }}"
+          - "Network: {{ docker_network }}"
+          - "MySQL: {{ mysql_health.container.State.Health.Status }}"
+          - "Prometheus: {{ prometheus_health.container.State.Health.Status }}"
+          - "NGINX: {{ nginx_health.container.State.Health.Status }}"
+          - "Prometheus HTTP: {{ prometheus_http.status }}"
+          - "NGINX configuration: valid"

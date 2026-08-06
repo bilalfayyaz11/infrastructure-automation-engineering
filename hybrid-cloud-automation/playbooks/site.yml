@@ -1,0 +1,117 @@
+---
+- name: Validate Hybrid Automation Prerequisites
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Verify web service image exists
+      community.docker.docker_image_info:
+        name: hybrid-web-service:1.0.0
+      register: hybrid_image
+
+    - name: Confirm web service image is available
+      ansible.builtin.assert:
+        that:
+          - hybrid_image.images | length == 1
+        fail_msg: >-
+          Image hybrid-web-service:1.0.0 does not exist.
+          Build the image before running the complete deployment.
+        success_msg: "Hybrid web service image is available."
+
+    - name: Display deployment start message
+      ansible.builtin.debug:
+        msg: "Starting complete hybrid environment deployment."
+
+- import_playbook: onprem-setup.yml
+- import_playbook: cloud-setup.yml
+- import_playbook: deploy-webservice.yml
+
+- name: Verify Complete Hybrid Deployment
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    required_containers:
+      - onprem-database
+      - onprem-cache
+      - cloud-database
+      - cloud-monitoring
+      - cloud-loadbalancer
+      - webservice-onprem-1
+      - webservice-cloud-1
+      - webservice-cloud-2
+
+    required_endpoints:
+      - name: on-premises service
+        url: http://127.0.0.1:5000/health
+
+      - name: cloud service one
+        url: http://127.0.0.1:5001/health
+
+      - name: cloud service two
+        url: http://127.0.0.1:5002/health
+
+      - name: load balancer
+        url: http://127.0.0.1:8080/info
+
+      - name: Prometheus
+        url: http://127.0.0.1:9090/-/healthy
+
+  tasks:
+    - name: Retrieve required container information
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: container_results
+      loop: "{{ required_containers }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Verify every required container is running
+      ansible.builtin.assert:
+        that:
+          - item.exists
+          - item.container.State.Running
+        fail_msg: >-
+          Container {{ item.item }} is missing or not running.
+        success_msg: "Container {{ item.item }} is running."
+      loop: "{{ container_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Verify service endpoints
+      ansible.builtin.uri:
+        url: "{{ item.url }}"
+        method: GET
+        status_code: 200
+        return_content: true
+      register: endpoint_results
+      retries: 10
+      delay: 3
+      until: endpoint_results.status == 200
+      loop: "{{ required_endpoints }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Verify load balancer network membership
+      community.docker.docker_container_info:
+        name: cloud-loadbalancer
+      register: load_balancer_info
+
+    - name: Confirm load balancer spans both environments
+      ansible.builtin.assert:
+        that:
+          - "'cloud-network' in load_balancer_info.container.NetworkSettings.Networks"
+          - "'onprem-network' in load_balancer_info.container.NetworkSettings.Networks"
+        fail_msg: >-
+          The load balancer is not connected to both Docker networks.
+        success_msg: >-
+          The load balancer is connected to both simulated environments.
+
+    - name: Display complete deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "On-premises services: PostgreSQL, Redis, web service"
+          - "Cloud services: MySQL, Prometheus, two web instances"
+          - "Load balancer: connected to cloud-network and onprem-network"
+          - "Validated endpoints: {{ required_endpoints | length }}"
+          - "Deployment status: HEALTHY"
